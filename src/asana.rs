@@ -1,7 +1,62 @@
-use std::{
-    collections::HashMap,
-    io::{self, Write},
-};
+//! Simple interactions with the Asana API.
+//!
+//! This module provides a client for interacting with the Asana API. It also provides a set of types that can be used
+//! to make requests to the Asana API.
+//!
+//! # Examples
+//!
+//! The following example shows how to use the client to get all the names of incomplete tasks in a user's task list
+//! along with some information about when they were created and when they are due.
+//!
+//! ```no_run
+//! # use asana_api::asana::{Client, DataRequest};
+//! # use serde::{Deserialize, Serialize};
+//! # use todo::asana::execute_authorization_flow;
+//!
+//! #[derive(Debug, Deserialize, Serialize)]
+//! struct Task {
+//!     gid: String,
+//!     #[serde(with = "todo::asana::serde_formats::datetime")]
+//!     created_at: DateTime<Local>,
+//!     #[serde(with = "todo::asana::serde_formats::optional_date")]
+//!     due_on: Option<NaiveDate>,
+//!     name: String,
+//! }
+//!
+//! impl<'a> DataRequest<'a> for Task {
+//!     type RequestData = String;
+//!     type ResponseData = Vec<Task>;
+//!
+//!     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
+//!         vec![
+//!             "user_task_lists".to_string(),
+//!             request_data.clone(),
+//!             "tasks".to_string(),
+//!         ]
+//!     }
+//!
+//!     fn fields() -> &'a [&'a str] {
+//!         &["this.gid", "this.created_at", "this.due_on", "this.name"]
+//!     }
+//!
+//!     fn params() -> &'a [(&'a str, &'a str)] {
+//!         &[("completed_since", "now")]
+//!     }
+//! }
+//!
+//! # async fn run() -> anyhow::Result<()> {
+//! let credentials = execute_authorization_flow().await?;
+//! let mut client = Client::new(credentials)?;
+//! let tasks: Vec<Task> = client.get::<Task>("user_task_list_gid".to_string()).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # See Also
+//!
+//! - [Asana API documentation](https://developers.asana.com/docs)
+
+use std::io::{self, Write};
 
 use anyhow::Context;
 use chrono::{DateTime, Duration, Local};
@@ -18,13 +73,45 @@ const ASANA_OAUTH_LOCAL_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 const ASANA_APP_CLIENT_ID: &str = "1206215514588292";
 const ASANA_APP_CLIENT_SECRET: &str = "8c7ea1c603de8462a3ba24f827ff1658";
 
+/// Comprehensive set of authorization credentials for the client.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Credentials {
+    /// OAuth2 access token, read more at https://oauth.net/2/access-tokens/
     access_token: String,
+    /// OAuth2 refresh token, read more at https://oauth.net/2/refresh-tokens/
     refresh_token: Option<String>,
 }
 
-#[must_use]
+/// Execute the full `OAuth2` authorization flow.
+///
+/// This function will open the user's browser to the Asana authorization page, and wait for the user to provide the
+/// authorization code. Once the user has provided the authorization code, it will exchange it for access credentials
+/// and return those credentials.
+///
+/// # Errors
+///
+/// This function will return an error if the authorization code could not be exchanged for access credentials.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use asana_api::asana::execute_authorization_flow;
+/// # async fn run() -> anyhow::Result<()> {
+/// let credentials = execute_authorization_flow().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Panics
+///
+/// This function will panic if it is unable to open the user's browser.
+///
+/// # See Also
+///
+/// - [Asana OAuth2 documentation](https://developers.asana.com/docs/oauth)
+/// - [OAuth2 documentation](https://oauth.net/2/)
+/// - [OAuth2 RFC](https://tools.ietf.org/html/rfc6749)
+/// - [OAuth2 for Native Apps RFC](https://tools.ietf.org/html/rfc8252)
 pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
     log::debug!("Setting up OAuth client and authorization request...");
     let oauth_client = oauth2::basic::BasicClient::new(
@@ -73,7 +160,29 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
     Ok(credentials)
 }
 
-#[must_use]
+/// Refresh the access token using the refresh token.
+///
+/// # Errors
+///
+/// This function will return an error if the refresh token could not be exchanged for access credentials.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use asana_api::asana::refresh_authorization;
+/// # async fn run() -> anyhow::Result<()> {
+/// let credentials = refresh_authorization(&"refresh_token".to_string()).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # See Also
+///
+/// - [Asana OAuth2 documentation](https://developers.asana.com/docs/oauth)
+/// - [OAuth2 documentation](https://oauth.net/2/)
+/// - [OAuth2 RFC](https://tools.ietf.org/html/rfc6749)
+/// - [OAuth2 for Native Apps RFC](https://tools.ietf.org/html/rfc8252)
+/// - [OAuth2 Refresh Token RFC](https://tools.ietf.org/html/rfc6749#section-6)
 pub async fn refresh_authorization(
     refresh_token: &oauth2::RefreshToken,
 ) -> anyhow::Result<Credentials> {
@@ -105,14 +214,69 @@ pub async fn refresh_authorization(
     Ok(credentials)
 }
 
+/// Trait for types that can be used to make requests to the Asana API.
+///
+/// # Examples
+///
+/// The following example shows how to implement `DataRequest` for a type that can be used to request all the names of
+/// incomplete tasks in a user's task list.
+///
+/// ```no_run
+/// # use asana_api::asana::DataRequest;
+/// # use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, Serialize)]
+/// struct Task {
+///     name: String,
+/// }
+///
+/// impl<'a> DataRequest<'a> for Task {
+///     type RequestData = String;
+///     type ResponseData = Vec<Task>;
+///
+///     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
+///         vec![
+///             "user_task_lists".to_string(),
+///             request_data.clone(),
+///             "tasks".to_string(),
+///         ]
+///     }
+///
+///     fn fields() -> &'a [&'a str] {
+///         &["this.name"]
+///     }
+///
+///     fn params() -> &'a [(&'a str, &'a str)] {
+///         &[("completed_since", "now")]
+///     }
+/// }
+/// ```
+///
+/// # See Also
+/// - [Asana API documentation](https://developers.asana.com/docs)
+/// - [Asana API reference](https://developers.asana.com/reference)
+/// - [Asana API explorer](https://developers.asana.com/explorer)
 pub trait DataRequest<'a> {
-    type RequestData;
+    /// Type of additonal data that is required to make the request.
+    type RequestData: 'a;
+    /// Type of data that is returned by the request.
     type ResponseData: Serialize + DeserializeOwned;
 
-    fn endpoint(request_data: Self::RequestData, base_url: &Url) -> Url;
-    fn fields() -> &'static [&'static str];
-    fn other_params() -> HashMap<String, String> {
-        HashMap::default()
+    /// Get the segments of the URL that are required to make the request.
+    #[must_use]
+    fn segments(request_data: &'a Self::RequestData) -> Vec<String>;
+
+    /// Get the fields to query the Asana API for.
+    ///
+    /// This should line up with the fields in `ResponseData` and must follow the `opt_fields` described in the [Asana
+    /// API input/output options documentation](https://developers.asana.com/docs/inputoutput-options).
+    #[must_use]
+    fn fields() -> &'a [&'a str];
+
+    /// Get any additional query parameters to use when making the request.
+    #[must_use]
+    fn params() -> &'a [(&'a str, &'a str)] {
+        &[]
     }
 }
 
@@ -123,12 +287,64 @@ struct DataResponse<D> {
 
 #[derive(Debug, Error)]
 enum ClientError {
-    #[error("unable to refresh token")]
-    UnableToRefreshToken,
+    #[error("unable to refresh access token")]
+    UnableToRefreshAccessToken,
 }
 
+/// Client for the Asana API.
+///
+/// This client is used to make requests to the Asana API and handles refreshing the access token when it expires. It
+/// also handles the serialization and deserialization of data to and from the Asana API.
+///
+/// The primary entry point for this client is the [`get`](Client::get) method, which is used to make requests to the
+/// Asana API. This method is based on a type that implements the [`DataRequest`](DataRequest) trait, which is used to
+/// specify the data that is required to make the request, the data that is returned by the request, and the fields to
+/// query the Asana API for.
+///
+/// # Examples
+///
+/// The following example shows how to use the client to get all the names of incomplete tasks in a user's task list.
+///
+/// ```no_run
+/// # use asana_api::asana::{Client, DataRequest};
+/// # use serde::{Deserialize, Serialize};
+/// # use todo::asana::execute_authorization_flow;
+///
+/// #[derive(Deserialize, Serialize)]
+/// struct Task {
+///     name: String,
+/// }
+///
+/// impl<'a> DataRequest<'a> for Task {
+///     type RequestData = String;
+///     type ResponseData = Vec<Task>;
+///
+///     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
+///         vec![
+///             "user_task_lists".to_string(),
+///             request_data.clone(),
+///             "tasks".to_string(),
+///         ]
+///     }
+///
+///     fn fields() -> &'static [&'static str] {
+///         &["this.name"]
+///     }
+///
+///     fn params() -> &'a [(&'a str, &'a str)] {
+///         &[("completed_since", "now")]
+///     }
+/// }
+///
+/// # async fn run() -> anyhow::Result<()> {
+/// let credentials = execute_authorization_flow().await?;
+/// let mut client = Client::new(credentials)?;
+/// let tasks: Vec<Task> = client.get::<Task>("user_task_list_gid".to_string()).await?;
+/// # Ok(())
+/// # }
+/// ````
 pub struct Client {
-    base_url: String,
+    base_url: Url,
     credentials: Credentials,
     inner_client: reqwest::Client,
 
@@ -144,15 +360,36 @@ impl Client {
             .context("could not build Asana client")
     }
 
-    pub async fn new() -> anyhow::Result<Client> {
-        let credentials = execute_authorization_flow().await?;
-        Ok(Client::new_from_credentials(credentials)?)
+    async fn make_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
+        self.inner_client
+            .get(url.clone())
+            .bearer_auth(&self.credentials.access_token)
+            .send()
+            .await
+            .context("failed to make request")
     }
 
-    pub fn new_from_credentials(credentials: Credentials) -> anyhow::Result<Client> {
+    /// Create a new client with the given credentials.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the inner client could not be constructed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use asana_api::asana::Client;
+    /// # use todo::asana::execute_authorization_flow;
+    /// # async fn run() -> anyhow::Result<()> {
+    /// let credentials = execute_authorization_flow().await?;
+    /// let client = Client::new(credentials)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new(credentials: Credentials) -> anyhow::Result<Client> {
         log::debug!("Setting up Asana client...");
         Ok(Client {
-            base_url: ASANA_API_BASE_URL.to_string(),
+            base_url: Url::parse(ASANA_API_BASE_URL)?,
             inner_client: Client::construct_inner_client()?,
             credentials,
             last_refresh_attempt: None,
@@ -165,9 +402,26 @@ impl Client {
         &self.credentials
     }
 
-    /// Refresh this client's access token using the refresh token.
+    /// Refresh the access token.
     ///
-    /// If no refresh token is available, goes through the entire authorization flow again.
+    /// If no refresh token is available, this will reinitiate the authorization flow.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the refresh token could not be exchanged for access credentials.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use asana_api::asana::Client;
+    /// # use todo::asana::execute_authorization_flow;
+    /// # async fn run() -> anyhow::Result<()> {
+    /// let credentials = execute_authorization_flow().await?;
+    /// let mut client = Client::new(credentials)?;
+    /// client.refresh().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn refresh(&mut self) -> anyhow::Result<()> {
         log::debug!("Attempting to refresh the Asana access token...");
         self.credentials = if let Some(refresh_token) = &self.credentials.refresh_token {
@@ -181,40 +435,37 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get<'a, D: DataRequest<'a>>(
+    /// Make a request to the Asana API.
+    ///
+    /// See documentation for [`DataRequest`](DataRequest) and [`Client`](Client) for more information on how to use
+    /// this method.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the request could not be made or if the response could not be
+    /// deserialized.
+    pub async fn get<'a, D: DataRequest<'a> + 'a>(
         &mut self,
-        request_data: D::RequestData,
+        request_data: &'a D::RequestData,
     ) -> anyhow::Result<D::ResponseData> {
-        let endpoint = D::endpoint(request_data, &Url::parse(&self.base_url.clone())?);
+        let mut url = self.base_url.join(&D::segments(request_data).join("/"))?;
 
-        let mut query = D::other_params();
-        query.insert("opt_fields".to_string(), D::fields().join(","));
+        let fields = D::fields().join(",");
+        let query = &[D::params(), &[("opt_fields", &fields)]].concat();
+        url.query_pairs_mut().extend_pairs(query).finish();
 
-        log::debug!("Making a request to {endpoint} with {query:?} params...");
-        let response = self
-            .inner_client
-            .get(endpoint.clone())
-            .bearer_auth(&self.credentials.access_token)
-            .query(&query)
-            .send()
-            .await
-            .context("failed to make request")?;
+        log::debug!("Making a request to {url}...");
+        let response = self.make_request(&url).await?;
 
         let response = if response.status() == StatusCode::UNAUTHORIZED {
             if self
                 .last_refresh_attempt
                 .is_some_and(|t| t + Duration::minutes(5) > Local::now())
             {
-                return Err(ClientError::UnableToRefreshToken)?;
+                return Err(ClientError::UnableToRefreshAccessToken)?;
             }
             self.refresh().await?;
-            self.inner_client
-                .get(endpoint)
-                .bearer_auth(&self.credentials.access_token)
-                .query(&query)
-                .send()
-                .await
-                .context("failed to make request")?
+            self.make_request(&url).await?
         } else {
             response
         };
@@ -223,60 +474,65 @@ impl Client {
     }
 }
 
-pub mod datetime_format {
-    use chrono::{DateTime, Local, NaiveDateTime, Utc};
-    use serde::{self, Deserialize, Deserializer, Serializer};
+/// Definitions for for the serde serialization and deserialization of types that interact with the Asana API.
+pub mod serde_formats {
+    #![allow(missing_docs)]
+    #![allow(clippy::missing_errors_doc)]
+    pub mod datetime {
+        use chrono::{DateTime, Local, NaiveDateTime, Utc};
+        use serde::{self, Deserialize, Deserializer, Serializer};
 
-    const FORMAT: &str = "%Y-%m-%dT%H:%M:%S.%fZ";
+        const FORMAT: &str = "%Y-%m-%dT%H:%M:%S.%fZ";
 
-    pub fn serialize<S>(date: &DateTime<Local>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = format!("{}", date.naive_utc().format(FORMAT));
-        serializer.serialize_str(&s)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Local>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let dt = NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?;
-        Ok(DateTime::from(DateTime::<Utc>::from_naive_utc_and_offset(
-            dt, Utc,
-        )))
-    }
-}
-
-pub mod optional_date_format {
-    use chrono::NaiveDate;
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    const FORMAT: &str = "%Y-%m-%d";
-
-    pub fn serialize<S>(date: &Option<NaiveDate>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if let Some(date) = date {
-            let s = format!("{}", date.format(FORMAT));
+        pub fn serialize<S>(date: &DateTime<Local>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let s = format!("{}", date.naive_utc().format(FORMAT));
             serializer.serialize_str(&s)
-        } else {
-            serializer.serialize_unit()
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Local>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let s = String::deserialize(deserializer)?;
+            let dt = NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?;
+            Ok(DateTime::from(DateTime::<Utc>::from_naive_utc_and_offset(
+                dt, Utc,
+            )))
         }
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<NaiveDate>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if let Ok(s) = String::deserialize(deserializer) {
-            Ok(Some(
-                NaiveDate::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?,
-            ))
-        } else {
-            Ok(None)
+    pub mod optional_date {
+        use chrono::NaiveDate;
+        use serde::{self, Deserialize, Deserializer, Serializer};
+
+        const FORMAT: &str = "%Y-%m-%d";
+
+        pub fn serialize<S>(date: &Option<NaiveDate>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if let Some(date) = date {
+                let s = format!("{}", date.format(FORMAT));
+                serializer.serialize_str(&s)
+            } else {
+                serializer.serialize_unit()
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<NaiveDate>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            if let Ok(s) = String::deserialize(deserializer) {
+                Ok(Some(
+                    NaiveDate::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?,
+                ))
+            } else {
+                Ok(None)
+            }
         }
     }
 }
