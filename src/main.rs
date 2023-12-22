@@ -8,6 +8,7 @@ use std::{
 use anyhow::Context;
 use chrono::{DateTime, Days, Local, NaiveDate};
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use human_panic::setup_panic;
 use serde::{Deserialize, Serialize};
 use todo::asana::{execute_authorization_flow, Client, Credentials, DataRequest};
@@ -33,18 +34,25 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Print out a summary of current TODO tasks
-    Summary,
+    Summary {
+        #[arg(long, default_value = "false")]
+        use_cache: bool,
+    },
+
+    /// Pull and cache information about TODO tasks, without printing anything
+    Update,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Cache {
     credentials: Option<Credentials>,
+    tasks: Option<Vec<Task>>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Config {}
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Task {
     gid: String,
     #[serde(with = "todo::asana::serde_formats::datetime")]
@@ -168,14 +176,16 @@ async fn main() -> anyhow::Result<()> {
     let cache = load_cache(&expand_homedir(&args.cache_path)?)?;
     let _config = load_config(&expand_homedir(&args.config_path)?)?;
 
-    let credentials = if let Some(credentials) = cache.credentials {
-        credentials
+    let credentials = if let Some(credentials) = &cache.credentials {
+        credentials.clone()
     } else {
         let credentials = execute_authorization_flow().await?;
+        let cache = cache.clone();
         save_cache(
             &expand_homedir(&args.cache_path)?,
             &Cache {
                 credentials: Some(credentials.clone()),
+                ..cache
             },
         )?;
         credentials
@@ -183,12 +193,9 @@ async fn main() -> anyhow::Result<()> {
     let mut client = Client::new(credentials)?;
 
     // TODO: eventually pull this out and get the tasks list automatically.
-    let tasks = client
-        .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
-        .await?;
 
     match args.command {
-        Command::Summary => {
+        Command::Summary { use_cache } => {
             fn task_or_tasks(num: usize) -> String {
                 if num == 1 {
                     "1 task".to_string()
@@ -196,6 +203,14 @@ async fn main() -> anyhow::Result<()> {
                     format!("{num} tasks")
                 }
             }
+
+            let tasks = if let (true, Some(tasks)) = (use_cache, cache.tasks) {
+                tasks
+            } else {
+                client
+                    .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
+                    .await?
+            };
 
             let today = Local::now().date_naive();
             let num_overdue = tasks
@@ -218,18 +233,45 @@ async fn main() -> anyhow::Result<()> {
 
             let mut string = String::new();
             string.push_str(&match (num_overdue, num_due_today) {
-                (0, 0) => "Nice! Everything done for now!".to_string(),
-                (o, 0) => format!("You have {} overdue.", task_or_tasks(o)),
-                (0, t) => format!("You have {} due today.", task_or_tasks(t)),
-                (o, t) => format!("You have {} overdue or due today", task_or_tasks(o + t)),
+                (0, 0) => "Nice! Everything done for now!".green().bold().to_string(),
+                (o, 0) => format!("You have {} overdue.", task_or_tasks(o))
+                    .red()
+                    .bold()
+                    .to_string(),
+                (0, t) => format!("You have {} due today.", task_or_tasks(t))
+                    .yellow()
+                    .bold()
+                    .to_string(),
+                (o, t) => format!("You have {} overdue or due today", task_or_tasks(o + t))
+                    .red()
+                    .bold()
+                    .to_string(),
             });
 
             string.push_str(&match num_due_week {
                 0 => String::new(),
-                w => format!(" You have another {} due within a week.", task_or_tasks(w)),
+                w => format!(" You have another {} due within a week.", task_or_tasks(w))
+                    .blue()
+                    .to_string(),
             });
 
-            println!("{string} (https://app.asana.com/0/{ASANA_USER_TASK_LIST_GID}/list)");
+            println!(
+                "{string} {}",
+                format!("(https://app.asana.com/0/{ASANA_USER_TASK_LIST_GID}/list)").dimmed()
+            );
+        }
+
+        Command::Update => {
+            let tasks = client
+                .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
+                .await?;
+            save_cache(
+                &expand_homedir(&args.cache_path)?,
+                &Cache {
+                    tasks: Some(tasks),
+                    ..cache
+                },
+            )?;
         }
     }
 
