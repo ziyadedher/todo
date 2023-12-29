@@ -74,12 +74,17 @@ const ASANA_APP_CLIENT_ID: &str = "1206215514588292";
 const ASANA_APP_CLIENT_SECRET: &str = "8c7ea1c603de8462a3ba24f827ff1658";
 
 /// Comprehensive set of authorization credentials for the client.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct Credentials {
-    /// OAuth2 access token, read more at https://oauth.net/2/access-tokens/
-    access_token: String,
-    /// OAuth2 refresh token, read more at https://oauth.net/2/refresh-tokens/
-    refresh_token: Option<String>,
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum Credentials {
+    /// OAuth2 authorization credentials for the client.
+    OAuth2 {
+        /// OAuth2 access token, read more at https://oauth.net/2/access-tokens/
+        access_token: String,
+        /// OAuth2 refresh token, read more at https://oauth.net/2/refresh-tokens/
+        refresh_token: Option<String>,
+    },
+    /// Personal access token, read more at https://developers.asana.com/docs/personal-access-token
+    PersonalAccessToken(String),
 }
 
 /// Execute the full `OAuth2` authorization flow.
@@ -150,7 +155,7 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
         .request_async(async_http_client)
         .await
         .context("could not exchange authorization code for an access token")?;
-    let credentials = Credentials {
+    let credentials = Credentials::OAuth2 {
         access_token: token.access_token().secret().to_string(),
         refresh_token: token
             .refresh_token()
@@ -204,7 +209,7 @@ pub async fn refresh_authorization(
         .request_async(async_http_client)
         .await
         .context("could not exchange refresh token for an access token")?;
-    let credentials = Credentials {
+    let credentials = Credentials::OAuth2 {
         access_token: token.access_token().secret().to_string(),
         refresh_token: token
             .refresh_token()
@@ -287,8 +292,8 @@ struct DataResponse<D> {
 
 #[derive(Debug, Error)]
 enum ClientError {
-    #[error("unable to refresh access token")]
-    UnableToRefreshAccessToken,
+    #[error("unable to refresh access token: {0}")]
+    UnableToRefreshAccessToken(String),
 }
 
 /// Client for the Asana API.
@@ -361,9 +366,16 @@ impl Client {
     }
 
     async fn make_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
+        let token = match &self.credentials {
+            Credentials::OAuth2 {
+                access_token,
+                refresh_token: _,
+            } => access_token,
+            Credentials::PersonalAccessToken(token) => token,
+        };
         self.inner_client
             .get(url.clone())
-            .bearer_auth(&self.credentials.access_token)
+            .bearer_auth(token)
             .send()
             .await
             .context("failed to make request")
@@ -423,16 +435,33 @@ impl Client {
     /// # }
     /// ```
     pub async fn refresh(&mut self) -> anyhow::Result<()> {
-        log::debug!("Attempting to refresh the Asana access token...");
-        self.credentials = if let Some(refresh_token) = &self.credentials.refresh_token {
-            log::debug!("Found a refresh token, attempting to refresh authorization directly...");
-            refresh_authorization(&oauth2::RefreshToken::new(refresh_token.clone())).await?
-        } else {
-            log::debug!("Could not find a refresh token, reinitiating the authorization flow...");
-            execute_authorization_flow().await?
-        };
-        self.inner_client = Client::construct_inner_client()?;
-        Ok(())
+        match &self.credentials {
+            Credentials::OAuth2 {
+                access_token: _,
+                refresh_token,
+            } => {
+                log::debug!("Attempting to refresh the Asana access token...");
+                self.credentials = if let Some(refresh_token) = refresh_token {
+                    log::debug!(
+                        "Found a refresh token, attempting to refresh authorization directly..."
+                    );
+                    refresh_authorization(&oauth2::RefreshToken::new(refresh_token.clone())).await?
+                } else {
+                    log::debug!(
+                        "Could not find a refresh token, reinitiating the authorization flow..."
+                    );
+                    execute_authorization_flow().await?
+                };
+                self.inner_client = Client::construct_inner_client()?;
+                Ok(())
+            }
+
+            _ => {
+                return Err(ClientError::UnableToRefreshAccessToken(
+                    "not using OAuth2 flow".to_string(),
+                ))?
+            }
+        }
     }
 
     /// Make a request to the Asana API.
@@ -462,7 +491,9 @@ impl Client {
                 .last_refresh_attempt
                 .is_some_and(|t| t + Duration::minutes(5) > Local::now())
             {
-                return Err(ClientError::UnableToRefreshAccessToken)?;
+                return Err(ClientError::UnableToRefreshAccessToken(
+                    "unauthorized".to_string(),
+                ))?;
             }
             self.refresh().await?;
             self.make_request(&url).await?
