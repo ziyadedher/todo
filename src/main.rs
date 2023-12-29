@@ -27,6 +27,10 @@ struct Args {
     #[arg(long, default_value = "~/.config/todo/todo.toml")]
     config_path: PathBuf,
 
+    /// Whether to use the cache or not
+    #[arg(long, default_value = "false")]
+    use_cache: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -34,10 +38,10 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Print out a summary of current TODO tasks
-    Summary {
-        #[arg(long, default_value = "false")]
-        use_cache: bool,
-    },
+    Summary,
+
+    /// Print out a list of TODO tasks ordered by due date
+    List,
 
     /// Pull and cache information about TODO tasks, without printing anything
     Update,
@@ -192,26 +196,30 @@ async fn main() -> anyhow::Result<()> {
     };
     let mut client = Client::new(credentials)?;
 
-    // TODO: eventually pull this out and get the tasks list automatically.
+    log::debug!("Getting tasks...");
+    let tasks = if let (true, Some(tasks)) = (args.use_cache, cache.tasks) {
+        log::debug!("Using cached tasks...");
+        tasks
+    } else {
+        log::debug!("Getting tasks from Asana...");
+        client
+            .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
+            .await?
+    };
+    log::debug!("Got {} tasks", tasks.len());
+    log::trace!("Tasks: {tasks:#?}");
+
+    fn task_or_tasks(num: usize) -> String {
+        if num == 1 {
+            "1 task".to_string()
+        } else {
+            format!("{num} tasks")
+        }
+    }
 
     match args.command {
-        Command::Summary { use_cache } => {
-            fn task_or_tasks(num: usize) -> String {
-                if num == 1 {
-                    "1 task".to_string()
-                } else {
-                    format!("{num} tasks")
-                }
-            }
-
-            let tasks = if let (true, Some(tasks)) = (use_cache, cache.tasks) {
-                tasks
-            } else {
-                client
-                    .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
-                    .await?
-            };
-
+        Command::Summary => {
+            log::info!("Producing a summary of tasks...");
             let today = Local::now().date_naive();
             let num_overdue = tasks
                 .iter()
@@ -261,6 +269,80 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
+        Command::List => {
+            log::info!("Producing a list of tasks...");
+            let today = Local::now().date_naive();
+            let mut overdue = tasks
+                .iter()
+                .filter(|t| t.due_on.is_some_and(|d| d < today))
+                .collect::<Vec<_>>();
+            overdue.sort_by_key(|t| t.due_on.unwrap());
+            let mut due_today = tasks
+                .iter()
+                .filter(|t| t.due_on.is_some_and(|d| d == today))
+                .collect::<Vec<_>>();
+            due_today.sort_by_key(|t| t.due_on.unwrap());
+            let mut due_week = tasks
+                .iter()
+                .filter(|t| {
+                    t.due_on
+                        .is_some_and(|d| d <= today.checked_add_days(Days::new(7)).unwrap())
+                })
+                .collect::<Vec<_>>();
+            due_week.sort_by_key(|t| t.due_on.unwrap());
+
+            let mut string = String::new();
+
+            if !overdue.is_empty() {
+                string.push_str(&format!(
+                    "{} {}\n",
+                    task_or_tasks(overdue.len()).red().bold(),
+                    "overdue:".bold()
+                ));
+                for task in overdue {
+                    string.push_str(&format!(
+                        "- ({}) {}\n",
+                        task.due_on.unwrap().to_string().red(),
+                        task.name
+                    ));
+                }
+                string.push('\n');
+            }
+
+            if !due_today.is_empty() {
+                string.push_str(&format!(
+                    "{} {}\n",
+                    task_or_tasks(due_today.len()).yellow(),
+                    "due today:".bold()
+                ));
+                for task in due_today {
+                    string.push_str(&format!("- {}\n", task.name));
+                }
+                string.push('\n');
+            }
+
+            if !due_week.is_empty() {
+                string.push_str(&format!(
+                    "{} {}\n",
+                    task_or_tasks(due_week.len()).to_string().blue(),
+                    "due within a week:".bold()
+                ));
+                for task in due_week {
+                    string.push_str(&format!(
+                        "- ({}) {}\n",
+                        task.due_on.unwrap().to_string().blue(),
+                        task.name
+                    ));
+                }
+            }
+
+            if string.is_empty() {
+                string.push_str(&"Nice! Everything done for now!".green().bold().to_string());
+            } else {
+                println!("{}", string.trim());
+            }
+        }
+
         Command::Update => {
             let tasks = client
                 .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
@@ -269,7 +351,7 @@ async fn main() -> anyhow::Result<()> {
                 &expand_homedir(&args.cache_path)?,
                 &Cache {
                     tasks: Some(tasks),
-                    ..cache
+                    credentials: Some(client.credentials().clone()),
                 },
             )?;
         }
