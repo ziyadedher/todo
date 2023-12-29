@@ -138,7 +138,7 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
 
     log::info!("Opening browser to authorization URL...");
     println!("Opening your browser and sending you to {auth_url}...");
-    open::that(auth_url.to_string()).context("could not open authorization URL in the browser")?;
+    open::that_detached(auth_url.to_string()).context("could not open authorization URL in the browser")?;
 
     log::info!("Waiting for user to provide the authorization code...");
     print!("Once you're done, come back here and post the code you got: ");
