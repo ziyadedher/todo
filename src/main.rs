@@ -285,8 +285,9 @@ async fn main() -> anyhow::Result<()> {
             let mut due_week = tasks
                 .iter()
                 .filter(|t| {
-                    t.due_on
-                        .is_some_and(|d| d <= today.checked_add_days(Days::new(7)).unwrap())
+                    t.due_on.is_some_and(|d| {
+                        d > today && d <= today.checked_add_days(Days::new(7)).unwrap()
+                    })
                 })
                 .collect::<Vec<_>>();
             due_week.sort_by_key(|t| t.due_on.unwrap());
