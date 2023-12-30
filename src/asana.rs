@@ -370,7 +370,7 @@ impl Client {
             .context("could not build Asana client")
     }
 
-    async fn make_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
+    async fn make_get_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
         let token = match &self.credentials {
             Credentials::OAuth2 {
                 access_token,
@@ -489,7 +489,7 @@ impl Client {
         url.query_pairs_mut().extend_pairs(query).finish();
 
         log::debug!("Making a request to {url}...");
-        let response = self.make_request(&url).await?;
+        let response = self.make_get_request(&url).await?;
 
         let response = if response.status() == StatusCode::UNAUTHORIZED {
             if self
@@ -501,7 +501,7 @@ impl Client {
                 ))?;
             }
             self.refresh().await?;
-            self.make_request(&url).await?
+            self.make_get_request(&url).await?
         } else {
             response
         };
