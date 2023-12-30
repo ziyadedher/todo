@@ -138,7 +138,8 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
 
     log::info!("Opening browser to authorization URL...");
     println!("Opening your browser and sending you to {auth_url}...");
-    open::that_detached(auth_url.to_string()).context("could not open authorization URL in the browser")?;
+    open::that_detached(auth_url.to_string())
+        .context("could not open authorization URL in the browser")?;
 
     log::info!("Waiting for user to provide the authorization code...");
     print!("Once you're done, come back here and post the code you got: ");
@@ -211,9 +212,13 @@ pub async fn refresh_authorization(
         .context("could not exchange refresh token for an access token")?;
     let credentials = Credentials::OAuth2 {
         access_token: token.access_token().secret().to_string(),
-        refresh_token: token
-            .refresh_token()
-            .map(|token| token.secret().to_string()),
+        refresh_token: Some(
+            token
+                .refresh_token()
+                .unwrap_or(refresh_token)
+                .secret()
+                .to_string(),
+        ),
     };
 
     Ok(credentials)
