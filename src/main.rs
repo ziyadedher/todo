@@ -37,13 +37,13 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Print out a summary of current TODO tasks
+    /// Print out a summary of current todo tasks
     Summary,
 
-    /// Print out a list of TODO tasks ordered by due date
+    /// Print out a list of todo tasks ordered by due date
     List,
 
-    /// Pull and cache information about TODO tasks, without printing anything
+    /// Pull and cache information about todo task and focus, without printing anything
     Update,
 }
 
@@ -196,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let mut client = Client::new(credentials)?;
 
-    log::debug!("Getting tasks...");
+    log::info!("Getting tasks...");
     let tasks = if let (true, Some(tasks)) = (args.use_cache, cache.tasks) {
         log::debug!("Using cached tasks...");
         tasks
@@ -217,30 +217,49 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let today = Local::now().date_naive();
+
+    log::info!("Grouping tasks...");
+    let overdue_tasks = {
+        let mut tasks: Vec<_> = tasks
+            .iter()
+            .filter(|t| t.due_on.is_some_and(|d| d < today))
+            .collect();
+        tasks.sort_by_key(|t| t.due_on.unwrap());
+        tasks
+    };
+    let due_today_tasks = {
+        let mut tasks: Vec<_> = tasks
+            .iter()
+            .filter(|t| t.due_on.is_some_and(|d| d == today))
+            .collect();
+        tasks.sort_by_key(|t| t.due_on.unwrap());
+        tasks
+    };
+    let due_week_tasks = {
+        let mut tasks: Vec<_> = tasks
+            .iter()
+            .filter(|t| {
+                t.due_on.is_some_and(|d| {
+                    d > today && d <= today.checked_add_days(Days::new(7)).unwrap()
+                })
+            })
+            .collect();
+        tasks.sort_by_key(|t| t.due_on.unwrap());
+        tasks
+    };
+    log::debug!(
+        "Grouped tasks: {overdue_tasks:#?} overdue, {due_today_tasks:#?} due today, {due_week_tasks:#?} due this week",
+        overdue_tasks = overdue_tasks.len(),
+        due_today_tasks = due_today_tasks.len(),
+        due_week_tasks = due_week_tasks.len()
+    );
+
     match args.command {
         Command::Summary => {
             log::info!("Producing a summary of tasks...");
-            let today = Local::now().date_naive();
-            let num_overdue = tasks
-                .iter()
-                .filter(|t| t.due_on.is_some_and(|d| d < today))
-                .count();
-            let num_due_today = tasks
-                .iter()
-                .filter(|t| t.due_on.is_some_and(|d| d == today))
-                .count();
-            let num_due_week = tasks
-                .iter()
-                .filter(|t| {
-                    t.due_on
-                        .is_some_and(|d| d <= today.checked_add_days(Days::new(7)).unwrap())
-                })
-                .count()
-                - num_due_today
-                - num_overdue;
-
             let mut string = String::new();
-            string.push_str(&match (num_overdue, num_due_today) {
+            string.push_str(&match (overdue_tasks.len(), due_today_tasks.len()) {
                 (0, 0) => "Nice! Everything done for now!".green().bold().to_string(),
                 (o, 0) => format!("You have {} overdue.", task_or_tasks(o))
                     .red()
@@ -256,7 +275,7 @@ async fn main() -> anyhow::Result<()> {
                     .to_string(),
             });
 
-            string.push_str(&match num_due_week {
+            string.push_str(&match due_week_tasks.len() {
                 0 => String::new(),
                 w => format!(" You have another {} due within a week.", task_or_tasks(w))
                     .blue()
@@ -271,36 +290,15 @@ async fn main() -> anyhow::Result<()> {
 
         Command::List => {
             log::info!("Producing a list of tasks...");
-            let today = Local::now().date_naive();
-            let mut overdue = tasks
-                .iter()
-                .filter(|t| t.due_on.is_some_and(|d| d < today))
-                .collect::<Vec<_>>();
-            overdue.sort_by_key(|t| t.due_on.unwrap());
-            let mut due_today = tasks
-                .iter()
-                .filter(|t| t.due_on.is_some_and(|d| d == today))
-                .collect::<Vec<_>>();
-            due_today.sort_by_key(|t| t.due_on.unwrap());
-            let mut due_week = tasks
-                .iter()
-                .filter(|t| {
-                    t.due_on.is_some_and(|d| {
-                        d > today && d <= today.checked_add_days(Days::new(7)).unwrap()
-                    })
-                })
-                .collect::<Vec<_>>();
-            due_week.sort_by_key(|t| t.due_on.unwrap());
-
             let mut string = String::new();
 
-            if !overdue.is_empty() {
+            if !overdue_tasks.is_empty() {
                 string.push_str(&format!(
                     "{} {}\n",
-                    task_or_tasks(overdue.len()).red().bold(),
+                    task_or_tasks(overdue_tasks.len()).red().bold(),
                     "overdue:".bold()
                 ));
-                for task in overdue {
+                for task in overdue_tasks {
                     string.push_str(&format!(
                         "- ({}) {}\n",
                         task.due_on.unwrap().to_string().red(),
@@ -310,25 +308,25 @@ async fn main() -> anyhow::Result<()> {
                 string.push('\n');
             }
 
-            if !due_today.is_empty() {
+            if !due_today_tasks.is_empty() {
                 string.push_str(&format!(
                     "{} {}\n",
-                    task_or_tasks(due_today.len()).yellow(),
+                    task_or_tasks(due_today_tasks.len()).yellow(),
                     "due today:".bold()
                 ));
-                for task in due_today {
+                for task in due_today_tasks {
                     string.push_str(&format!("- {}\n", task.name));
                 }
                 string.push('\n');
             }
 
-            if !due_week.is_empty() {
+            if !due_week_tasks.is_empty() {
                 string.push_str(&format!(
                     "{} {}\n",
-                    task_or_tasks(due_week.len()).to_string().blue(),
+                    task_or_tasks(due_week_tasks.len()).to_string().blue(),
                     "due within a week:".bold()
                 ));
-                for task in due_week {
+                for task in due_week_tasks {
                     string.push_str(&format!(
                         "- ({}) {}\n",
                         task.due_on.unwrap().to_string().blue(),
