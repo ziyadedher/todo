@@ -370,17 +370,60 @@ impl Client {
             .context("could not build Asana client")
     }
 
-    async fn make_get_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
-        let token = match &self.credentials {
+    fn get_authorization_token(&self) -> &str {
+        match &self.credentials {
             Credentials::OAuth2 {
                 access_token,
                 refresh_token: _,
             } => access_token,
             Credentials::PersonalAccessToken(token) => token,
-        };
+        }
+    }
+
+    async fn make_get_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
         self.inner_client
             .get(url.clone())
-            .bearer_auth(token)
+            .bearer_auth(self.get_authorization_token())
+            .send()
+            .await
+            .context("failed to make request")
+    }
+
+    /// Make a POST request to the Asana API.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the request could not be made.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use asana_api::asana::Client;
+    /// # use todo::asana::execute_authorization_flow;
+    /// # async fn run() -> anyhow::Result<()> {
+    /// let credentials = execute_authorization_flow().await?;
+    /// let mut client = Client::new(credentials)?;
+    ///
+    /// #[derive(Serialize)]
+    /// struct TaskCreation {
+    ///     name: String,
+    /// }
+    ///
+    /// let response = client.make_post_request(&"https://app.asana.com/api/1.0/tasks".parse()?, &TaskCreation {
+    ///     name: "test".to_string(),
+    /// }).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn make_post_request(
+        &self,
+        url: &Url,
+        body: impl Serialize,
+    ) -> anyhow::Result<reqwest::Response> {
+        self.inner_client
+            .post(url.clone())
+            .bearer_auth(self.get_authorization_token())
+            .json(&body)
             .send()
             .await
             .context("failed to make request")
