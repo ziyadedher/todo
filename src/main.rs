@@ -1,19 +1,33 @@
 #![warn(clippy::pedantic)]
 
 use std::{
-    env, fs,
+    collections::HashMap,
+    env,
+    fmt::Display,
+    fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::Context;
-use chrono::{DateTime, Days, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Timelike, Weekday};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Input};
 use human_panic::setup_panic;
+use regex::Regex;
+use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use todo::asana::{execute_authorization_flow, Client, Credentials, DataRequest};
+use todo::asana::{execute_authorization_flow, Client, Credentials, DataRequest, DataWrapper};
 
 const ASANA_USER_TASK_LIST_GID: &str = "1199118625430768";
+const ASANA_FOCUS_PROJECT_GID: &str = "1200179899177794";
+
+const FOCUS_WEEK_PATTERN: &str =
+    r"^Daily Focuses \((?<from>\d{4}-\d{2}-\d{2}) to (?<to>\d{4}-\d{2}-\d{2})\)$";
+const FOCUS_DAY_PATTERN: &str = r"^Daily Focus for \w+ \((?<date>\d{4}-\d{2}-\d{2})\)$";
+
+/// The hour of the day at which the end of day is considered to be starting.
+const START_HOUR_FOR_EOD: u32 = 20;
 
 /// Todo is a simple Asana helper script that pulls data from Asana and shows it in CLI settings
 #[derive(Debug, Parser)]
@@ -43,21 +57,32 @@ enum Command {
     /// Print out a list of todo tasks ordered by due date
     List,
 
+    /// Manage the Focus project
+    Focus {
+        #[command(subcommand)]
+        command: Option<FocusCommand>,
+    },
+
     /// Pull and cache information about todo task and focus, without printing anything
     Update,
+}
+
+#[derive(Debug, Subcommand)]
+enum FocusCommand {
+    Run,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Cache {
     credentials: Option<Credentials>,
-    tasks: Option<Vec<Task>>,
+    tasks: Option<Vec<UserTask>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Config {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Task {
+struct UserTask {
     gid: String,
     #[serde(with = "todo::asana::serde_formats::datetime")]
     created_at: DateTime<Local>,
@@ -66,9 +91,9 @@ struct Task {
     name: String,
 }
 
-impl<'a> DataRequest<'a> for Task {
+impl<'a> DataRequest<'a> for UserTask {
     type RequestData = String;
-    type ResponseData = Vec<Task>;
+    type ResponseData = Vec<UserTask>;
 
     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
         vec![
@@ -84,6 +109,347 @@ impl<'a> DataRequest<'a> for Task {
 
     fn params() -> &'a [(&'a str, &'a str)] {
         &[("completed_since", "now")]
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Section {
+    gid: String,
+    name: String,
+}
+
+impl<'a> DataRequest<'a> for Section {
+    type RequestData = String;
+    type ResponseData = Vec<Section>;
+
+    fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
+        vec![
+            "projects".to_string(),
+            request_data.clone(),
+            "sections".to_string(),
+        ]
+    }
+
+    fn fields() -> &'a [&'a str] {
+        &["this.gid", "this.name"]
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CreateSectionRequest {
+    name: String,
+    insert_before: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FocusTask {
+    gid: String,
+    name: String,
+    custom_fields: Option<Vec<FocusTaskCustomField>>,
+}
+
+impl<'a> DataRequest<'a> for FocusTask {
+    type RequestData = String;
+    type ResponseData = Vec<FocusTask>;
+
+    fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
+        vec![
+            "sections".to_string(),
+            request_data.clone(),
+            "tasks".to_string(),
+        ]
+    }
+
+    fn fields() -> &'a [&'a str] {
+        &[
+            "this.gid",
+            "this.name",
+            "this.custom_fields",
+            "this.custom_fields.gid",
+            "this.custom_fields.number_value",
+        ]
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FocusTaskCustomField {
+    gid: String,
+    number_value: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UpdateFocusTaskCustomFieldsRequest {
+    notes: String,
+    custom_fields: HashMap<String, u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CreateSectionTaskRequest {
+    name: String,
+    projects: Vec<String>,
+    memberships: Vec<CreateSectionTaskRequestMembership>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CreateSectionTaskRequestMembership {
+    project: String,
+    section: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AddTaskToSectionRequest {
+    task: String,
+    insert_after: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FocusWeek {
+    section: Section,
+    from: NaiveDate,
+    to: NaiveDate,
+}
+
+impl TryFrom<Section> for FocusWeek {
+    type Error = anyhow::Error;
+
+    fn try_from(section: Section) -> Result<Self, Self::Error> {
+        let captures = Regex::new(FOCUS_WEEK_PATTERN)
+            .context("unable to parse focus section pattern")?
+            .captures(&section.name)
+            .context(section.name.clone())?;
+        Ok(Self {
+            section: section.clone(),
+            from: NaiveDate::parse_from_str(&captures["from"], "%Y-%m-%d")
+                .context(section.name.clone())?,
+            to: NaiveDate::parse_from_str(&captures["to"], "%Y-%m-%d")
+                .context(section.name.clone())?,
+        })
+    }
+}
+
+impl Display for FocusWeek {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Focus Week ({from} to {to})",
+            from = self.from.format("%Y-%m-%d"),
+            to = self.to.format("%Y-%m-%d")
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FocusDay {
+    task: FocusTask,
+    date: NaiveDate,
+    stats: FocusDayStats,
+}
+
+impl TryFrom<FocusTask> for FocusDay {
+    type Error = anyhow::Error;
+
+    fn try_from(task: FocusTask) -> Result<Self, Self::Error> {
+        let captures = Regex::new(FOCUS_DAY_PATTERN)
+            .context("unable to parse focus section pattern")?
+            .captures(&task.name)
+            .context(task.name.clone())?;
+        Ok(Self {
+            task: task.clone(),
+            date: NaiveDate::parse_from_str(&captures["date"], "%Y-%m-%d")
+                .context(task.name.clone())?,
+            stats: task
+                .custom_fields
+                .context("could not find custom fields")?
+                .try_into()?,
+        })
+    }
+}
+
+impl Display for FocusDay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Focus Day ({date}) (stats: {stats})",
+            date = self.date.format("%Y-%m-%d"),
+            stats = self.stats
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FocusDayStats {
+    sleep: FocusDayStat,
+    energy: FocusDayStat,
+    flow: FocusDayStat,
+    hydration: FocusDayStat,
+    health: FocusDayStat,
+    satisfaction: FocusDayStat,
+    stress: FocusDayStat,
+}
+
+impl FocusDayStats {
+    fn stats(&self) -> Vec<&FocusDayStat> {
+        vec![
+            &self.sleep,
+            &self.energy,
+            &self.flow,
+            &self.hydration,
+            &self.health,
+            &self.satisfaction,
+            &self.stress,
+        ]
+    }
+
+    fn set_stat(&mut self, stat: FocusDayStat) {
+        match stat {
+            FocusDayStat::Sleep(_) => self.sleep = stat,
+            FocusDayStat::Energy(_) => self.energy = stat,
+            FocusDayStat::Flow(_) => self.flow = stat,
+            FocusDayStat::Hydration(_) => self.hydration = stat,
+            FocusDayStat::Health(_) => self.health = stat,
+            FocusDayStat::Satisfaction(_) => self.satisfaction = stat,
+            FocusDayStat::Stress(_) => self.stress = stat,
+        }
+    }
+}
+
+impl Default for FocusDayStats {
+    fn default() -> Self {
+        Self {
+            sleep: FocusDayStat::Sleep(None),
+            energy: FocusDayStat::Energy(None),
+            flow: FocusDayStat::Flow(None),
+            hydration: FocusDayStat::Hydration(None),
+            health: FocusDayStat::Health(None),
+            satisfaction: FocusDayStat::Satisfaction(None),
+            stress: FocusDayStat::Stress(None),
+        }
+    }
+}
+
+impl TryFrom<Vec<FocusTaskCustomField>> for FocusDayStats {
+    type Error = anyhow::Error;
+
+    fn try_from(custom_fields: Vec<FocusTaskCustomField>) -> Result<Self, Self::Error> {
+        let mut stats = Self::default();
+        for custom_field in custom_fields {
+            let stat = FocusDayStat::try_from(custom_field)?;
+            match stat {
+                FocusDayStat::Sleep(_) => stats.sleep = stat,
+                FocusDayStat::Energy(_) => stats.energy = stat,
+                FocusDayStat::Flow(_) => stats.flow = stat,
+                FocusDayStat::Hydration(_) => stats.hydration = stat,
+                FocusDayStat::Health(_) => stats.health = stat,
+                FocusDayStat::Satisfaction(_) => stats.satisfaction = stat,
+                FocusDayStat::Stress(_) => stats.stress = stat,
+            }
+        }
+        Ok(stats)
+    }
+}
+
+impl Display for FocusDayStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{sleep}, {energy}, {flow}, {hydration}, {health}, {satisfaction}, {stress}",
+            sleep = self.sleep,
+            energy = self.energy,
+            flow = self.flow,
+            hydration = self.hydration,
+            health = self.health,
+            satisfaction = self.satisfaction,
+            stress = self.stress,
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+enum FocusDayStat {
+    Sleep(Option<u32>),
+    Energy(Option<u32>),
+    Flow(Option<u32>),
+    Hydration(Option<u32>),
+    Health(Option<u32>),
+    Satisfaction(Option<u32>),
+    Stress(Option<u32>),
+}
+
+impl FocusDayStat {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Sleep(_) => "sleep",
+            Self::Energy(_) => "energy",
+            Self::Flow(_) => "flow",
+            Self::Hydration(_) => "hydration",
+            Self::Health(_) => "health",
+            Self::Satisfaction(_) => "satisfaction",
+            Self::Stress(_) => "stress",
+        }
+    }
+
+    fn value(&self) -> Option<u32> {
+        match self {
+            Self::Sleep(value) => *value,
+            Self::Energy(value) => *value,
+            Self::Flow(value) => *value,
+            Self::Hydration(value) => *value,
+            Self::Health(value) => *value,
+            Self::Satisfaction(value) => *value,
+            Self::Stress(value) => *value,
+        }
+    }
+
+    fn set_value(&mut self, value: Option<u32>) {
+        match self {
+            Self::Sleep(_) => *self = Self::Sleep(value),
+            Self::Energy(_) => *self = Self::Energy(value),
+            Self::Flow(_) => *self = Self::Flow(value),
+            Self::Hydration(_) => *self = Self::Hydration(value),
+            Self::Health(_) => *self = Self::Health(value),
+            Self::Satisfaction(_) => *self = Self::Satisfaction(value),
+            Self::Stress(_) => *self = Self::Stress(value),
+        }
+    }
+
+    fn field_gid(&self) -> &'static str {
+        match self {
+            Self::Sleep(_) => "1204172638538713",
+            Self::Energy(_) => "1204172638540767",
+            Self::Flow(_) => "1204172638540769",
+            Self::Hydration(_) => "1204172638540771",
+            Self::Health(_) => "1204172638540773",
+            Self::Satisfaction(_) => "1204172638540775",
+            Self::Stress(_) => "1204172638540777",
+        }
+    }
+}
+
+impl TryFrom<FocusTaskCustomField> for FocusDayStat {
+    type Error = anyhow::Error;
+
+    fn try_from(custom_field: FocusTaskCustomField) -> Result<Self, Self::Error> {
+        Ok(match custom_field.gid.as_str() {
+            "1204172638538713" => Self::Sleep(custom_field.number_value),
+            "1204172638540767" => Self::Energy(custom_field.number_value),
+            "1204172638540769" => Self::Flow(custom_field.number_value),
+            "1204172638540771" => Self::Hydration(custom_field.number_value),
+            "1204172638540773" => Self::Health(custom_field.number_value),
+            "1204172638540775" => Self::Satisfaction(custom_field.number_value),
+            "1204172638540777" => Self::Stress(custom_field.number_value),
+            gid => anyhow::bail!("unknown focus day stat gid: {}", gid),
+        })
+    }
+}
+
+impl Display for FocusDayStat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{name}={value}",
+            name = self.name(),
+            value = self.value().map_or("-".to_string(), |v| v.to_string())
+        )
     }
 }
 
@@ -203,7 +569,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         log::debug!("Getting tasks from Asana...");
         client
-            .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
+            .get::<UserTask>(&ASANA_USER_TASK_LIST_GID.to_string())
             .await?
     };
     log::debug!("Got {} tasks", tasks.len());
@@ -217,7 +583,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let today = Local::now().date_naive();
+    let now = Local::now();
+    let today = now.date_naive();
 
     log::info!("Grouping tasks...");
     let overdue_tasks = {
@@ -249,7 +616,7 @@ async fn main() -> anyhow::Result<()> {
         tasks
     };
     log::debug!(
-        "Grouped tasks: {overdue_tasks:#?} overdue, {due_today_tasks:#?} due today, {due_week_tasks:#?} due this week",
+        "Grouped tasks: {overdue_tasks} overdue, {due_today_tasks} due today, {due_week_tasks} due this week",
         overdue_tasks = overdue_tasks.len(),
         due_today_tasks = due_today_tasks.len(),
         due_week_tasks = due_week_tasks.len()
@@ -342,9 +709,289 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
+        Command::Focus { command } => {
+            log::info!("Managing focus...");
+
+            log::info!("Getting focus sections...");
+            let sections = client
+                .get::<Section>(&ASANA_FOCUS_PROJECT_GID.to_string())
+                .await?;
+            log::debug!("Got {} sections", sections.len());
+            log::trace!("Sections: {sections:#?}", sections = sections);
+
+            log::info!("Constructing focus weeks...");
+            let focus_weeks = sections
+                .into_iter()
+                .filter(|s| s.name.starts_with("Daily Focuses"))
+                .filter_map(|s| match s.try_into() {
+                    Ok(s) => Some(s),
+                    Err(err) => {
+                        log::warn!("Could not parse focus section name: {}", err);
+                        None
+                    }
+                })
+                .collect::<Vec<FocusWeek>>();
+            log::debug!("Constructed {} focus weeks", focus_weeks.len());
+            log::trace!("Focus weeks: {focus_weeks:#?}", focus_weeks = focus_weeks);
+
+            log::info!("Finding current focus week...");
+            let current_week = if let Some(current_week) = focus_weeks
+                .iter()
+                .find(|w| w.from <= today && w.to >= today)
+            {
+                log::debug!(
+                    "Found current focus week: {current_week}",
+                    current_week = current_week
+                );
+                current_week.clone()
+            } else {
+                log::warn!("Could not find current focus week, so creating it...");
+                let week = today.week(Weekday::Mon);
+                let current_week: FocusWeek = client
+                    .mutate_request(
+                        Method::POST,
+                        &format!(
+                            "https://app.asana.com/api/1.0/projects/{project_gid}/sections",
+                            project_gid = ASANA_FOCUS_PROJECT_GID
+                        )
+                        .parse()
+                        .context("issue parsing focus week creation request url")?,
+                        DataWrapper {
+                            data: CreateSectionRequest {
+                                name: format!(
+                                    "Daily Focuses ({from} to {to})",
+                                    from = week.first_day().format("%Y-%m-%d"),
+                                    to = week.last_day().format("%Y-%m-%d")
+                                ),
+                                insert_before: focus_weeks
+                                    .get(0)
+                                    .context("unable to get any focus weeks")?
+                                    .section
+                                    .gid
+                                    .clone(),
+                            },
+                        },
+                    )
+                    .await
+                    .context("issue creating focus week")?
+                    .json::<DataWrapper<Section>>()
+                    .await
+                    .context("unable to parse focus week creation response")?
+                    .data
+                    .try_into()?;
+                log::debug!(
+                    "Created current focus week: {current_week}",
+                    current_week = current_week
+                );
+                current_week
+            };
+            log::debug!(
+                "Got current focus week: {current_week}",
+                current_week = current_week
+            );
+
+            log::info!("Getting tasks in current focus week...");
+            let tasks = client.get::<FocusTask>(&current_week.section.gid).await?;
+            log::debug!("Got {} tasks", tasks.len());
+
+            log::info!("Constructing focus days...");
+            let focus_days = tasks
+                .into_iter()
+                .filter(|t| t.name.starts_with("Daily Focus for"))
+                .filter_map(|t| match t.try_into() {
+                    Ok(t) => Some(t),
+                    Err(err) => {
+                        log::warn!("Could not parse focus task name: {}", err);
+                        None
+                    }
+                })
+                .collect::<Vec<FocusDay>>();
+            log::debug!("Constructed {} focus days", focus_days.len());
+            log::trace!("Focus days: {focus_days:#?}", focus_days = focus_days);
+
+            log::info!("Finding current focus day...");
+            let current_day = if let Some(current_day) = focus_days.iter().find(|d| d.date == today)
+            {
+                log::debug!(
+                    "Found current focus day: {current_day}",
+                    current_day = current_day
+                );
+                current_day.clone()
+            } else {
+                log::warn!("Could not find current focus day, so creating it...");
+                let current_day: FocusDay = client
+                    .mutate_request(
+                        Method::POST,
+                        &format!("https://app.asana.com/api/1.0/tasks")
+                            .parse()
+                            .context("issue parsing focus day creation request url")?,
+                        DataWrapper {
+                            data: CreateSectionTaskRequest {
+                                name: format!(
+                                    "Daily Focus for {day} ({date})",
+                                    day = today.weekday().to_string(),
+                                    date = today.format("%Y-%m-%d")
+                                ),
+                                projects: vec![ASANA_FOCUS_PROJECT_GID.to_string()],
+                                memberships: vec![CreateSectionTaskRequestMembership {
+                                    project: ASANA_FOCUS_PROJECT_GID.to_string(),
+                                    section: current_week.section.gid.clone(),
+                                }],
+                            },
+                        },
+                    )
+                    .await
+                    .context("issue creating focus day")?
+                    .json::<DataWrapper<FocusTask>>()
+                    .await
+                    .context("unable to parse focus day creation response")?
+                    .data
+                    .try_into()?;
+                log::debug!(
+                    "Created current focus day: {current_day}",
+                    current_day = current_day
+                );
+
+                if let Some(previous_closest_day) = focus_days
+                    .iter()
+                    .filter(|d| d.date < today)
+                    .max_by_key(|d| d.date)
+                {
+                    log::debug!("Ordering the created focus day correctly...");
+                    client
+                        .mutate_request(
+                            Method::POST,
+                            &format!(
+                                "https://app.asana.com/api/1.0/sections/{section_gid}/addTask",
+                                section_gid = current_week.section.gid
+                            )
+                            .parse()
+                            .context("issue parsing focus day ordering request url")?,
+                            DataWrapper {
+                                data: AddTaskToSectionRequest {
+                                    task: current_day.task.gid.clone(),
+                                    insert_after: previous_closest_day.task.gid.clone(),
+                                },
+                            },
+                        )
+                        .await
+                        .context("issue ordering focus day")?;
+                }
+
+                current_day
+            };
+            log::debug!(
+                "Got current focus day: {current_day}",
+                current_day = current_day
+            );
+
+            match command {
+                Some(FocusCommand::Run) | None => {
+                    log::info!("Running focus...");
+
+                    let unfilled_stats_at_this_time: Vec<&FocusDayStat> = current_day
+                        .stats
+                        .stats()
+                        .into_iter()
+                        .filter(|s| match s {
+                            FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => s.value().is_none(),
+                            _ => s.value().is_none() && now.hour() >= START_HOUR_FOR_EOD,
+                        })
+                        .collect::<Vec<_>>();
+
+                    let mut new_stats = current_day.stats.clone();
+                    if !unfilled_stats_at_this_time.is_empty() {
+                        println!("{}", "Time to fill out some stats!".bold().cyan());
+                        for stat in unfilled_stats_at_this_time {
+                            let mut new_stat = stat.clone();
+                            let value = Input::<u32>::with_theme(&ColorfulTheme::default())
+                                .with_prompt(format!("{} {}", stat.name(), "(0-9)".dimmed()))
+                                .validate_with(|i: &u32| {
+                                    if *i > 9 {
+                                        Err("value must be between 0 and 9".to_string())
+                                    } else {
+                                        Ok(())
+                                    }
+                                })
+                                .interact_text()?;
+                            new_stat.set_value(Some(value));
+                            new_stats.set_stat(new_stat);
+                        }
+                        println!("");
+                    }
+
+                    println!("{}", "Have anything to say?".bold().magenta());
+                    let new_diary_entry = Input::<String>::with_theme(&ColorfulTheme::default())
+                        .with_prompt("diary")
+                        .with_initial_text("asdasd".to_string())
+                        .interact_text()?;
+                    println!("");
+
+                    client
+                        .mutate_request(
+                            Method::PUT,
+                            &format!(
+                                "https://app.asana.com/api/1.0/tasks/{task_gid}",
+                                task_gid = current_day.task.gid
+                            )
+                            .parse()
+                            .context("issue parsing focus day update request url")?,
+                            DataWrapper {
+                                data: UpdateFocusTaskCustomFieldsRequest {
+                                    notes: new_diary_entry,
+                                    custom_fields: new_stats
+                                        .stats()
+                                        .into_iter()
+                                        .filter_map(|s| {
+                                            if s.value().is_some() {
+                                                Some((
+                                                    s.field_gid().to_string(),
+                                                    s.value().unwrap(),
+                                                ))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect(),
+                                },
+                            },
+                        )
+                        .await?;
+
+                    println!(
+                        "🧠 {} {}\n\n{}\n\n{}",
+                        format!(
+                            "Focus Day: {}",
+                            current_day.date.weekday().to_string().blue()
+                        )
+                        .bold(),
+                        format!("({})", current_day.date.format("%Y-%m-%d")).dimmed(),
+                        "no diary entry — yet!".dimmed(),
+                        "❤️ Statistics".bold().cyan()
+                    );
+                    for stat in current_day.stats.stats() {
+                        let line = format!(
+                            "{name}: {value}",
+                            name = stat.name().to_string().bold(),
+                            value = stat.value().map_or("-".to_string(), |v| v.to_string())
+                        );
+                        println!(
+                            "   {}",
+                            if stat.value().is_some() {
+                                line.normal()
+                            } else {
+                                line.dimmed()
+                            }
+                        );
+                    }
+                }
+            }
+        }
+
         Command::Update => {
+            log::info!("Updating cache...");
             let tasks = client
-                .get::<Task>(&ASANA_USER_TASK_LIST_GID.to_string())
+                .get::<UserTask>(&ASANA_USER_TASK_LIST_GID.to_string())
                 .await?;
             save_cache(
                 &expand_homedir(&args.cache_path)?,
