@@ -994,6 +994,8 @@ async fn main() -> anyhow::Result<()> {
                             "Updated focus day stats: {new_stats:#?}",
                             new_stats = new_stats
                         );
+                    } else {
+                        println!("{}\n", "All caught up on stats!".bold().green());
                     }
 
                     log::info!("Updating focus day diary...");
