@@ -63,6 +63,10 @@ enum Command {
         #[arg(long)]
         date: Option<NaiveDate>,
 
+        /// If set, forces the end of day to be considered to be starting
+        #[arg(long, default_value = "false")]
+        force_eod: bool,
+
         #[command(subcommand)]
         command: Option<FocusCommand>,
     },
@@ -925,7 +929,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Command::Focus { command, date } => {
+        Command::Focus {
+            date,
+            force_eod,
+            command,
+        } => {
             log::info!("Managing focus...");
 
             let date = if let Some(date) = date {
@@ -951,7 +959,9 @@ async fn main() -> anyhow::Result<()> {
                             FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => s.value().is_none(),
                             _ => {
                                 s.value().is_none()
-                                    && (date < today || now.hour() >= START_HOUR_FOR_EOD)
+                                    && (force_eod
+                                        || date < today
+                                        || now.hour() >= START_HOUR_FOR_EOD)
                             }
                         })
                         .collect::<Vec<_>>();
