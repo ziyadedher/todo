@@ -59,6 +59,10 @@ enum Command {
 
     /// Manage the Focus project
     Focus {
+        /// The date to focus on
+        #[arg(long)]
+        date: Option<NaiveDate>,
+
         #[command(subcommand)]
         command: Option<FocusCommand>,
     },
@@ -256,7 +260,7 @@ impl FocusDay {
             format!("Focus Day: {}", self.date.weekday().to_string().blue()).bold(),
             format!("({})", self.date.format("%Y-%m-%d")).dimmed(),
             if self.diary.is_empty() {
-                "No diary entry yet.".dimmed()
+                "no diary entry — yet.".dimmed()
             } else {
                 self.diary.normal()
             },
@@ -921,10 +925,18 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        Command::Focus { command } => {
+        Command::Focus { command, date } => {
             log::info!("Managing focus...");
 
-            let focus_day = get_focus_day(today, &mut client).await?;
+            let date = if let Some(date) = date {
+                log::info!("Using date from command line: {}", date);
+                date
+            } else {
+                log::info!("Using today's date: {}", today);
+                today
+            };
+
+            let focus_day = get_focus_day(date, &mut client).await?;
 
             match command {
                 Some(FocusCommand::Run) | None => {
@@ -937,7 +949,10 @@ async fn main() -> anyhow::Result<()> {
                         .into_iter()
                         .filter(|s| match s {
                             FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => s.value().is_none(),
-                            _ => s.value().is_none() && now.hour() >= START_HOUR_FOR_EOD,
+                            _ => {
+                                s.value().is_none()
+                                    && (date < today || now.hour() >= START_HOUR_FOR_EOD)
+                            }
                         })
                         .collect::<Vec<_>>();
                     log::trace!(
@@ -976,6 +991,7 @@ async fn main() -> anyhow::Result<()> {
                     let new_diary_entry = Input::<String>::with_theme(&ColorfulTheme::default())
                         .with_prompt("diary")
                         .with_initial_text(focus_day.diary.clone())
+                        .allow_empty(true)
                         .interact_text()?;
                     println!("");
                     log::debug!(
@@ -1021,7 +1037,7 @@ async fn main() -> anyhow::Result<()> {
 
                     print!(
                         "{}",
-                        get_focus_day(today, &mut client).await?.to_full_string()
+                        get_focus_day(date, &mut client).await?.to_full_string()
                     )
                 }
             }
