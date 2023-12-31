@@ -61,7 +61,7 @@ use std::io::{self, Write};
 use anyhow::Context;
 use chrono::{DateTime, Duration, Local};
 use oauth2::{reqwest::async_http_client, TokenResponse};
-use reqwest::{StatusCode, Url};
+use reqwest::{Method, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
@@ -290,9 +290,14 @@ pub trait DataRequest<'a> {
     }
 }
 
+/// Wrapper for data exchanged with the Asana API.
+///
+/// This wrapper is used to serialize data to the Asana API or deserialize from it, since the Asana API expects a
+/// "data" field in a lot of cases.
 #[derive(Deserialize, Serialize)]
-struct DataResponse<D> {
-    data: D,
+pub struct DataWrapper<D> {
+    /// Data exchanged with the Asana API
+    pub data: D,
 }
 
 #[derive(Debug, Error)]
@@ -389,7 +394,7 @@ impl Client {
             .context("failed to make request")
     }
 
-    /// Make a POST request to the Asana API.
+    /// Make a POST or PUT request to the Asana API.
     ///
     /// # Errors
     ///
@@ -409,19 +414,20 @@ impl Client {
     ///     name: String,
     /// }
     ///
-    /// let response = client.make_post_request(&"https://app.asana.com/api/1.0/tasks".parse()?, &TaskCreation {
+    /// let response = client.mutate_request(reqwest::Method::POST, &"https://app.asana.com/api/1.0/tasks".parse()?, &TaskCreation {
     ///     name: "test".to_string(),
     /// }).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn make_post_request(
+    pub async fn mutate_request(
         &self,
+        method: Method,
         url: &Url,
         body: impl Serialize,
     ) -> anyhow::Result<reqwest::Response> {
         self.inner_client
-            .post(url.clone())
+            .request(method, url.clone())
             .bearer_auth(self.get_authorization_token())
             .json(&body)
             .send()
@@ -549,7 +555,7 @@ impl Client {
             response
         };
 
-        Ok(response.json::<DataResponse<D::ResponseData>>().await?.data)
+        Ok(response.json::<DataWrapper<D::ResponseData>>().await?.data)
     }
 }
 
