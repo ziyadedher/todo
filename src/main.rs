@@ -145,6 +145,7 @@ struct CreateSectionRequest {
 struct FocusTask {
     gid: String,
     name: String,
+    notes: String,
     custom_fields: Option<Vec<FocusTaskCustomField>>,
 }
 
@@ -164,6 +165,7 @@ impl<'a> DataRequest<'a> for FocusTask {
         &[
             "this.gid",
             "this.name",
+            "this.notes",
             "this.custom_fields",
             "this.custom_fields.gid",
             "this.custom_fields.number_value",
@@ -243,6 +245,41 @@ struct FocusDay {
     task: FocusTask,
     date: NaiveDate,
     stats: FocusDayStats,
+    diary: String,
+}
+
+impl FocusDay {
+    fn to_full_string(&self) -> String {
+        let mut string = String::new();
+        string.push_str(&format!(
+            "🧠 {} {}\n\n{}\n\n{}",
+            format!("Focus Day: {}", self.date.weekday().to_string().blue()).bold(),
+            format!("({})", self.date.format("%Y-%m-%d")).dimmed(),
+            if self.diary.is_empty() {
+                "No diary entry yet.".dimmed()
+            } else {
+                self.diary.normal()
+            },
+            "❤️ Statistics".bold().cyan()
+        ));
+        string.push('\n');
+        for stat in self.stats.stats() {
+            let line = format!(
+                "{name}: {value}",
+                name = stat.name().to_string().bold(),
+                value = stat.value().map_or("-".to_string(), |v| v.to_string())
+            );
+            string.push_str(&format!(
+                "   {}\n",
+                if stat.value().is_some() {
+                    line.normal()
+                } else {
+                    line.dimmed()
+                }
+            ));
+        }
+        string
+    }
 }
 
 impl TryFrom<FocusTask> for FocusDay {
@@ -261,6 +298,7 @@ impl TryFrom<FocusTask> for FocusDay {
                 .custom_fields
                 .context("could not find custom fields")?
                 .try_into()?,
+            diary: task.notes,
         })
     }
 }
@@ -276,7 +314,7 @@ impl Display for FocusDay {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct FocusDayStats {
     sleep: FocusDayStat,
     energy: FocusDayStat,
@@ -364,7 +402,7 @@ impl Display for FocusDayStats {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 enum FocusDayStat {
     Sleep(Option<u32>),
     Energy(Option<u32>),
@@ -532,6 +570,180 @@ fn load_config(path: &Path) -> anyhow::Result<Config> {
     log::trace!("Loaded configuration: {config:#?}");
 
     Ok(config)
+}
+
+async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<FocusDay> {
+    log::info!("Getting focus sections...");
+    let sections = client
+        .get::<Section>(&ASANA_FOCUS_PROJECT_GID.to_string())
+        .await?;
+    log::debug!("Got {} sections", sections.len());
+    log::trace!("Sections: {sections:#?}", sections = sections);
+
+    log::info!("Constructing focus weeks...");
+    let focus_weeks = sections
+        .into_iter()
+        .filter(|s| s.name.starts_with("Daily Focuses"))
+        .filter_map(|s| match s.try_into() {
+            Ok(s) => Some(s),
+            Err(err) => {
+                log::warn!("Could not parse focus section name: {}", err);
+                None
+            }
+        })
+        .collect::<Vec<FocusWeek>>();
+    log::debug!("Constructed {} focus weeks", focus_weeks.len());
+    log::trace!("Focus weeks: {focus_weeks:#?}", focus_weeks = focus_weeks);
+
+    log::info!("Finding current focus week...");
+    let current_week =
+        if let Some(current_week) = focus_weeks.iter().find(|w| w.from <= day && w.to >= day) {
+            log::debug!(
+                "Found current focus week: {current_week}",
+                current_week = current_week
+            );
+            current_week.clone()
+        } else {
+            log::warn!("Could not find current focus week, so creating it...");
+            let week = day.week(Weekday::Mon);
+            let current_week: FocusWeek = client
+                .mutate_request(
+                    Method::POST,
+                    &format!(
+                        "https://app.asana.com/api/1.0/projects/{project_gid}/sections",
+                        project_gid = ASANA_FOCUS_PROJECT_GID
+                    )
+                    .parse()
+                    .context("issue parsing focus week creation request url")?,
+                    DataWrapper {
+                        data: CreateSectionRequest {
+                            name: format!(
+                                "Daily Focuses ({from} to {to})",
+                                from = week.first_day().format("%Y-%m-%d"),
+                                to = week.last_day().format("%Y-%m-%d")
+                            ),
+                            insert_before: focus_weeks
+                                .get(0)
+                                .context("unable to get any focus weeks")?
+                                .section
+                                .gid
+                                .clone(),
+                        },
+                    },
+                )
+                .await
+                .context("issue creating focus week")?
+                .json::<DataWrapper<Section>>()
+                .await
+                .context("unable to parse focus week creation response")?
+                .data
+                .try_into()?;
+            log::debug!(
+                "Created current focus week: {current_week}",
+                current_week = current_week
+            );
+            current_week
+        };
+    log::debug!(
+        "Got current focus week: {current_week}",
+        current_week = current_week
+    );
+
+    log::info!("Getting tasks in current focus week...");
+    let tasks = client.get::<FocusTask>(&current_week.section.gid).await?;
+    log::debug!("Got {} tasks", tasks.len());
+
+    log::info!("Constructing focus days...");
+    let focus_days = tasks
+        .into_iter()
+        .filter(|t| t.name.starts_with("Daily Focus for"))
+        .filter_map(|t| match t.try_into() {
+            Ok(t) => Some(t),
+            Err(err) => {
+                log::warn!("Could not parse focus task name: {}", err);
+                None
+            }
+        })
+        .collect::<Vec<FocusDay>>();
+    log::debug!("Constructed {} focus days", focus_days.len());
+    log::trace!("Focus days: {focus_days:#?}", focus_days = focus_days);
+
+    log::info!("Finding current focus day...");
+    let current_day = if let Some(current_day) = focus_days.iter().find(|d| d.date == day) {
+        log::debug!(
+            "Found current focus day: {current_day}",
+            current_day = current_day
+        );
+        current_day.clone()
+    } else {
+        log::warn!("Could not find current focus day, so creating it...");
+        let current_day: FocusDay = client
+            .mutate_request(
+                Method::POST,
+                &format!("https://app.asana.com/api/1.0/tasks")
+                    .parse()
+                    .context("issue parsing focus day creation request url")?,
+                DataWrapper {
+                    data: CreateSectionTaskRequest {
+                        name: format!(
+                            "Daily Focus for {day} ({date})",
+                            day = day.weekday().to_string(),
+                            date = day.format("%Y-%m-%d")
+                        ),
+                        projects: vec![ASANA_FOCUS_PROJECT_GID.to_string()],
+                        memberships: vec![CreateSectionTaskRequestMembership {
+                            project: ASANA_FOCUS_PROJECT_GID.to_string(),
+                            section: current_week.section.gid.clone(),
+                        }],
+                    },
+                },
+            )
+            .await
+            .context("issue creating focus day")?
+            .json::<DataWrapper<FocusTask>>()
+            .await
+            .context("unable to parse focus day creation response")?
+            .data
+            .try_into()?;
+        log::debug!(
+            "Created current focus day: {current_day}",
+            current_day = current_day
+        );
+
+        if let Some(previous_closest_day) = focus_days
+            .iter()
+            .filter(|d| d.date < day)
+            .max_by_key(|d| d.date)
+        {
+            log::debug!("Ordering the created focus day correctly...");
+            client
+                .mutate_request(
+                    Method::POST,
+                    &format!(
+                        "https://app.asana.com/api/1.0/sections/{section_gid}/addTask",
+                        section_gid = current_week.section.gid
+                    )
+                    .parse()
+                    .context("issue parsing focus day ordering request url")?,
+                    DataWrapper {
+                        data: AddTaskToSectionRequest {
+                            task: current_day.task.gid.clone(),
+                            insert_after: previous_closest_day.task.gid.clone(),
+                        },
+                    },
+                )
+                .await
+                .context("issue ordering focus day")?;
+        }
+
+        current_day
+    };
+    log::debug!(
+        "Got current focus day: {current_day}",
+        current_day = current_day
+    );
+
+    Ok(current_day)
 }
 
 #[tokio::main]
@@ -712,184 +924,14 @@ async fn main() -> anyhow::Result<()> {
         Command::Focus { command } => {
             log::info!("Managing focus...");
 
-            log::info!("Getting focus sections...");
-            let sections = client
-                .get::<Section>(&ASANA_FOCUS_PROJECT_GID.to_string())
-                .await?;
-            log::debug!("Got {} sections", sections.len());
-            log::trace!("Sections: {sections:#?}", sections = sections);
-
-            log::info!("Constructing focus weeks...");
-            let focus_weeks = sections
-                .into_iter()
-                .filter(|s| s.name.starts_with("Daily Focuses"))
-                .filter_map(|s| match s.try_into() {
-                    Ok(s) => Some(s),
-                    Err(err) => {
-                        log::warn!("Could not parse focus section name: {}", err);
-                        None
-                    }
-                })
-                .collect::<Vec<FocusWeek>>();
-            log::debug!("Constructed {} focus weeks", focus_weeks.len());
-            log::trace!("Focus weeks: {focus_weeks:#?}", focus_weeks = focus_weeks);
-
-            log::info!("Finding current focus week...");
-            let current_week = if let Some(current_week) = focus_weeks
-                .iter()
-                .find(|w| w.from <= today && w.to >= today)
-            {
-                log::debug!(
-                    "Found current focus week: {current_week}",
-                    current_week = current_week
-                );
-                current_week.clone()
-            } else {
-                log::warn!("Could not find current focus week, so creating it...");
-                let week = today.week(Weekday::Mon);
-                let current_week: FocusWeek = client
-                    .mutate_request(
-                        Method::POST,
-                        &format!(
-                            "https://app.asana.com/api/1.0/projects/{project_gid}/sections",
-                            project_gid = ASANA_FOCUS_PROJECT_GID
-                        )
-                        .parse()
-                        .context("issue parsing focus week creation request url")?,
-                        DataWrapper {
-                            data: CreateSectionRequest {
-                                name: format!(
-                                    "Daily Focuses ({from} to {to})",
-                                    from = week.first_day().format("%Y-%m-%d"),
-                                    to = week.last_day().format("%Y-%m-%d")
-                                ),
-                                insert_before: focus_weeks
-                                    .get(0)
-                                    .context("unable to get any focus weeks")?
-                                    .section
-                                    .gid
-                                    .clone(),
-                            },
-                        },
-                    )
-                    .await
-                    .context("issue creating focus week")?
-                    .json::<DataWrapper<Section>>()
-                    .await
-                    .context("unable to parse focus week creation response")?
-                    .data
-                    .try_into()?;
-                log::debug!(
-                    "Created current focus week: {current_week}",
-                    current_week = current_week
-                );
-                current_week
-            };
-            log::debug!(
-                "Got current focus week: {current_week}",
-                current_week = current_week
-            );
-
-            log::info!("Getting tasks in current focus week...");
-            let tasks = client.get::<FocusTask>(&current_week.section.gid).await?;
-            log::debug!("Got {} tasks", tasks.len());
-
-            log::info!("Constructing focus days...");
-            let focus_days = tasks
-                .into_iter()
-                .filter(|t| t.name.starts_with("Daily Focus for"))
-                .filter_map(|t| match t.try_into() {
-                    Ok(t) => Some(t),
-                    Err(err) => {
-                        log::warn!("Could not parse focus task name: {}", err);
-                        None
-                    }
-                })
-                .collect::<Vec<FocusDay>>();
-            log::debug!("Constructed {} focus days", focus_days.len());
-            log::trace!("Focus days: {focus_days:#?}", focus_days = focus_days);
-
-            log::info!("Finding current focus day...");
-            let current_day = if let Some(current_day) = focus_days.iter().find(|d| d.date == today)
-            {
-                log::debug!(
-                    "Found current focus day: {current_day}",
-                    current_day = current_day
-                );
-                current_day.clone()
-            } else {
-                log::warn!("Could not find current focus day, so creating it...");
-                let current_day: FocusDay = client
-                    .mutate_request(
-                        Method::POST,
-                        &format!("https://app.asana.com/api/1.0/tasks")
-                            .parse()
-                            .context("issue parsing focus day creation request url")?,
-                        DataWrapper {
-                            data: CreateSectionTaskRequest {
-                                name: format!(
-                                    "Daily Focus for {day} ({date})",
-                                    day = today.weekday().to_string(),
-                                    date = today.format("%Y-%m-%d")
-                                ),
-                                projects: vec![ASANA_FOCUS_PROJECT_GID.to_string()],
-                                memberships: vec![CreateSectionTaskRequestMembership {
-                                    project: ASANA_FOCUS_PROJECT_GID.to_string(),
-                                    section: current_week.section.gid.clone(),
-                                }],
-                            },
-                        },
-                    )
-                    .await
-                    .context("issue creating focus day")?
-                    .json::<DataWrapper<FocusTask>>()
-                    .await
-                    .context("unable to parse focus day creation response")?
-                    .data
-                    .try_into()?;
-                log::debug!(
-                    "Created current focus day: {current_day}",
-                    current_day = current_day
-                );
-
-                if let Some(previous_closest_day) = focus_days
-                    .iter()
-                    .filter(|d| d.date < today)
-                    .max_by_key(|d| d.date)
-                {
-                    log::debug!("Ordering the created focus day correctly...");
-                    client
-                        .mutate_request(
-                            Method::POST,
-                            &format!(
-                                "https://app.asana.com/api/1.0/sections/{section_gid}/addTask",
-                                section_gid = current_week.section.gid
-                            )
-                            .parse()
-                            .context("issue parsing focus day ordering request url")?,
-                            DataWrapper {
-                                data: AddTaskToSectionRequest {
-                                    task: current_day.task.gid.clone(),
-                                    insert_after: previous_closest_day.task.gid.clone(),
-                                },
-                            },
-                        )
-                        .await
-                        .context("issue ordering focus day")?;
-                }
-
-                current_day
-            };
-            log::debug!(
-                "Got current focus day: {current_day}",
-                current_day = current_day
-            );
+            let focus_day = get_focus_day(today, &mut client).await?;
 
             match command {
                 Some(FocusCommand::Run) | None => {
                     log::info!("Running focus...");
 
-                    let unfilled_stats_at_this_time: Vec<&FocusDayStat> = current_day
+                    log::debug!("Calculating unfilled stats...");
+                    let unfilled_stats_at_this_time: Vec<&FocusDayStat> = focus_day
                         .stats
                         .stats()
                         .into_iter()
@@ -898,9 +940,14 @@ async fn main() -> anyhow::Result<()> {
                             _ => s.value().is_none() && now.hour() >= START_HOUR_FOR_EOD,
                         })
                         .collect::<Vec<_>>();
+                    log::trace!(
+                        "Calculated unfilled stats: {unfilled_stats_at_this_time:#?}",
+                        unfilled_stats_at_this_time = unfilled_stats_at_this_time
+                    );
 
-                    let mut new_stats = current_day.stats.clone();
+                    let mut new_stats = focus_day.stats.clone();
                     if !unfilled_stats_at_this_time.is_empty() {
+                        log::info!("Updating focus day stats...");
                         println!("{}", "Time to fill out some stats!".bold().cyan());
                         for stat in unfilled_stats_at_this_time {
                             let mut new_stat = stat.clone();
@@ -918,72 +965,64 @@ async fn main() -> anyhow::Result<()> {
                             new_stats.set_stat(new_stat);
                         }
                         println!("");
+                        log::debug!(
+                            "Updated focus day stats: {new_stats:#?}",
+                            new_stats = new_stats
+                        );
                     }
 
+                    log::info!("Updating focus day diary...");
                     println!("{}", "Have anything to say?".bold().magenta());
                     let new_diary_entry = Input::<String>::with_theme(&ColorfulTheme::default())
                         .with_prompt("diary")
-                        .with_initial_text("asdasd".to_string())
+                        .with_initial_text(focus_day.diary.clone())
                         .interact_text()?;
                     println!("");
-
-                    client
-                        .mutate_request(
-                            Method::PUT,
-                            &format!(
-                                "https://app.asana.com/api/1.0/tasks/{task_gid}",
-                                task_gid = current_day.task.gid
-                            )
-                            .parse()
-                            .context("issue parsing focus day update request url")?,
-                            DataWrapper {
-                                data: UpdateFocusTaskCustomFieldsRequest {
-                                    notes: new_diary_entry,
-                                    custom_fields: new_stats
-                                        .stats()
-                                        .into_iter()
-                                        .filter_map(|s| {
-                                            if s.value().is_some() {
-                                                Some((
-                                                    s.field_gid().to_string(),
-                                                    s.value().unwrap(),
-                                                ))
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect(),
-                                },
-                            },
-                        )
-                        .await?;
-
-                    println!(
-                        "🧠 {} {}\n\n{}\n\n{}",
-                        format!(
-                            "Focus Day: {}",
-                            current_day.date.weekday().to_string().blue()
-                        )
-                        .bold(),
-                        format!("({})", current_day.date.format("%Y-%m-%d")).dimmed(),
-                        "no diary entry — yet!".dimmed(),
-                        "❤️ Statistics".bold().cyan()
+                    log::debug!(
+                        "Updated focus day diary: {new_diary_entry}",
+                        new_diary_entry = new_diary_entry
                     );
-                    for stat in current_day.stats.stats() {
-                        let line = format!(
-                            "{name}: {value}",
-                            name = stat.name().to_string().bold(),
-                            value = stat.value().map_or("-".to_string(), |v| v.to_string())
-                        );
-                        println!(
-                            "   {}",
-                            if stat.value().is_some() {
-                                line.normal()
-                            } else {
-                                line.dimmed()
-                            }
-                        );
+
+                    log::info!("Deciding if there are any changes to focus data to sync...");
+                    if new_stats != focus_day.stats || new_diary_entry != focus_day.diary {
+                        log::info!("Sending new focus data...");
+                        client
+                            .mutate_request(
+                                Method::PUT,
+                                &format!(
+                                    "https://app.asana.com/api/1.0/tasks/{task_gid}",
+                                    task_gid = focus_day.task.gid
+                                )
+                                .parse()
+                                .context("issue parsing focus day update request url")?,
+                                DataWrapper {
+                                    data: UpdateFocusTaskCustomFieldsRequest {
+                                        notes: new_diary_entry,
+                                        custom_fields: new_stats
+                                            .stats()
+                                            .into_iter()
+                                            .filter_map(|s| {
+                                                if s.value().is_some() {
+                                                    Some((
+                                                        s.field_gid().to_string(),
+                                                        s.value().unwrap(),
+                                                    ))
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect(),
+                                    },
+                                },
+                            )
+                            .await?;
+                        log::debug!("Sent new focus data");
                     }
+
+                    print!(
+                        "{}",
+                        get_focus_day(today, &mut client).await?.to_full_string()
+                    )
                 }
             }
         }
