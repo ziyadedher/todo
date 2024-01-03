@@ -243,6 +243,9 @@ impl DataRequest<'_> for FocusTaskSubtask {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct CreateSubtaskRequest {
     name: String,
+    assignee: String,
+    #[serde(with = "todo::asana::serde_formats::optional_date")]
+    due_on: Option<NaiveDate>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1148,7 +1151,7 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         let subtask_name = Input::<String>::with_theme(&ColorfulTheme::default())
-                            .with_prompt("todo")
+                            .with_prompt("new task")
                             .allow_empty(true)
                             .interact_text()?;
                         if subtask_name.is_empty() {
@@ -1176,7 +1179,11 @@ async fn main() -> anyhow::Result<()> {
                                         Method::POST,
                                         &url,
                                         DataWrapper {
-                                            data: CreateSubtaskRequest { name: subtask_name },
+                                            data: CreateSubtaskRequest {
+                                                name: subtask_name,
+                                                assignee: "me".to_string(),
+                                                due_on: Some(today),
+                                            },
                                         },
                                     )
                                     .await?;
