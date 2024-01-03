@@ -11,7 +11,7 @@ use std::{
 use anyhow::Context;
 use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Timelike, Weekday};
 use clap::{Parser, Subcommand};
-use colored::Colorize;
+use console::{style, Term};
 use dialoguer::{theme::ColorfulTheme, Input};
 use human_panic::setup_panic;
 use regex::Regex;
@@ -262,30 +262,38 @@ struct FocusDay {
 impl FocusDay {
     fn to_full_string(&self) -> String {
         let mut string = String::new();
+
         string.push_str(&format!(
-            "🧠 {} {}\n\n{}\n\n{}",
-            format!("Focus Day: {}", self.date.weekday().to_string().blue()).bold(),
-            format!("({})", self.date.format("%Y-%m-%d")).dimmed(),
-            if self.diary.is_empty() {
-                "no diary entry — yet.".dimmed()
-            } else {
-                self.diary.normal()
-            },
-            "❤️ Statistics".bold().cyan()
+            "🧠 {} {}",
+            style(format!(
+                "Focus Day: {}",
+                style(self.date.weekday().to_string()).blue()
+            ))
+            .bold(),
+            style(format!("({})", self.date.format("%Y-%m-%d"))).dim(),
         ));
-        string.push('\n');
+        string.push_str(&format!(
+            "\n\n{}",
+            if self.diary.is_empty() {
+                style("no diary entry — yet.").dim()
+            } else {
+                style(self.diary.as_str())
+            },
+        ));
+        string.push_str(&format!("\n\n{}\n", style("❤️ Statistics").bold().cyan()));
+
         for stat in self.stats.stats() {
             let line = format!(
                 "{name}: {value}",
-                name = stat.name().to_string().bold(),
-                value = stat.value().map_or("-".to_string(), |v| v.to_string())
+                name = style(stat.name().to_string()).bold(),
+                value = style(stat.value().map_or("-".to_string(), |v| v.to_string()))
             );
             string.push_str(&format!(
                 "   {}\n",
                 if stat.value().is_some() {
-                    line.normal()
+                    style(line)
                 } else {
-                    line.dimmed()
+                    style(line).dim()
                 }
             ));
         }
@@ -845,37 +853,48 @@ async fn main() -> anyhow::Result<()> {
         due_week_tasks = due_week_tasks.len()
     );
 
+    let term = Term::stdout();
+
     match args.command {
         Command::Summary => {
             log::info!("Producing a summary of tasks...");
             let mut string = String::new();
             string.push_str(&match (overdue_tasks.len(), due_today_tasks.len()) {
-                (0, 0) => "Nice! Everything done for now!".green().bold().to_string(),
-                (o, 0) => format!("You have {} overdue.", task_or_tasks(o))
+                (0, 0) => style("Nice! Everything done for now!")
+                    .green()
+                    .bold()
+                    .to_string(),
+                (o, 0) => style(format!("You have {} overdue.", task_or_tasks(o)))
                     .red()
                     .bold()
                     .to_string(),
-                (0, t) => format!("You have {} due today.", task_or_tasks(t))
+                (0, t) => style(format!("You have {} due today.", task_or_tasks(t)))
                     .yellow()
                     .bold()
                     .to_string(),
-                (o, t) => format!("You have {} overdue or due today", task_or_tasks(o + t))
-                    .red()
-                    .bold()
-                    .to_string(),
+                (o, t) => style(format!(
+                    "You have {} overdue or due today",
+                    task_or_tasks(o + t)
+                ))
+                .red()
+                .bold()
+                .to_string(),
             });
 
             string.push_str(&match due_week_tasks.len() {
                 0 => String::new(),
-                w => format!(" You have another {} due within a week.", task_or_tasks(w))
-                    .blue()
-                    .to_string(),
+                w => style(format!(
+                    " You have another {} due within a week.",
+                    task_or_tasks(w)
+                ))
+                .blue()
+                .to_string(),
             });
 
-            println!(
+            term.write_line(&format!(
                 "{string} {}",
-                format!("(https://app.asana.com/0/{ASANA_USER_TASK_LIST_GID}/list)").dimmed()
-            );
+                style("(https://app.asana.com/0/{ASANA_USER_TASK_LIST_GID}/list)").dim()
+            ))?;
         }
 
         Command::List => {
@@ -885,13 +904,13 @@ async fn main() -> anyhow::Result<()> {
             if !overdue_tasks.is_empty() {
                 string.push_str(&format!(
                     "{} {}\n",
-                    task_or_tasks(overdue_tasks.len()).red().bold(),
-                    "overdue:".bold()
+                    style(task_or_tasks(overdue_tasks.len())).red().bold(),
+                    style("overdue:").bold()
                 ));
                 for task in overdue_tasks {
                     string.push_str(&format!(
                         "- ({}) {}\n",
-                        task.due_on.unwrap().to_string().red(),
+                        style(task.due_on.unwrap().to_string()).red(),
                         task.name
                     ));
                 }
@@ -901,8 +920,8 @@ async fn main() -> anyhow::Result<()> {
             if !due_today_tasks.is_empty() {
                 string.push_str(&format!(
                     "{} {}\n",
-                    task_or_tasks(due_today_tasks.len()).yellow(),
-                    "due today:".bold()
+                    style(task_or_tasks(due_today_tasks.len())).yellow(),
+                    style("due today:").bold()
                 ));
                 for task in due_today_tasks {
                     string.push_str(&format!("- {}\n", task.name));
@@ -913,20 +932,25 @@ async fn main() -> anyhow::Result<()> {
             if !due_week_tasks.is_empty() {
                 string.push_str(&format!(
                     "{} {}\n",
-                    task_or_tasks(due_week_tasks.len()).to_string().blue(),
-                    "due within a week:".bold()
+                    style(task_or_tasks(due_week_tasks.len())).blue(),
+                    style("due within a week:").bold()
                 ));
                 for task in due_week_tasks {
                     string.push_str(&format!(
                         "- ({}) {}\n",
-                        task.due_on.unwrap().to_string().blue(),
+                        style(task.due_on.unwrap().to_string()).blue(),
                         task.name
                     ));
                 }
             }
 
             if string.is_empty() {
-                string.push_str(&"Nice! Everything done for now!".green().bold().to_string());
+                string.push_str(
+                    &style("Nice! Everything done for now!")
+                        .green()
+                        .bold()
+                        .to_string(),
+                );
             } else {
                 println!("{}", string.trim());
             }
@@ -976,11 +1000,11 @@ async fn main() -> anyhow::Result<()> {
                     let mut new_stats = focus_day.stats.clone();
                     if !unfilled_stats_at_this_time.is_empty() {
                         log::info!("Updating focus day stats...");
-                        println!("{}", "Time to fill out some stats!".bold().cyan());
+                        println!("{}", style("Time to fill out some stats!").bold().cyan());
                         for stat in unfilled_stats_at_this_time {
                             let mut new_stat = stat.clone();
                             let value = Input::<u32>::with_theme(&ColorfulTheme::default())
-                                .with_prompt(format!("{} {}", stat.name(), "(0-9)".dimmed()))
+                                .with_prompt(format!("{} {}", stat.name(), style("(0-9)").dim()))
                                 .validate_with(|i: &u32| {
                                     if *i > 9 {
                                         Err("value must be between 0 and 9".to_string())
@@ -998,11 +1022,11 @@ async fn main() -> anyhow::Result<()> {
                             new_stats = new_stats
                         );
                     } else {
-                        println!("{}\n", "All caught up on stats!".bold().green());
+                        println!("{}\n", style("All caught up on stats!").bold().green());
                     }
 
                     log::info!("Updating focus day diary...");
-                    println!("{}", "Have anything to say?".bold().magenta());
+                    println!("{}", style("Have anything to say?").bold().magenta());
                     let new_diary_entry = Input::<String>::with_theme(&ColorfulTheme::default())
                         .with_prompt("diary")
                         .with_initial_text(focus_day.diary.clone())
