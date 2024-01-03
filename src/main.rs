@@ -13,9 +13,10 @@ use chrono::{DateTime, Datelike, Days, Local, NaiveDate, Timelike, Weekday};
 use clap::{Parser, Subcommand};
 use console::{style, Term};
 use dialoguer::{theme::ColorfulTheme, Input};
+use futures::future::join_all;
 use human_panic::setup_panic;
 use regex::Regex;
-use reqwest::Method;
+use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use todo::asana::{execute_authorization_flow, Client, Credentials, DataRequest, DataWrapper};
 
@@ -104,7 +105,7 @@ struct UserTask {
 
 impl<'a> DataRequest<'a> for UserTask {
     type RequestData = String;
-    type ResponseData = Vec<UserTask>;
+    type ResponseData = Vec<Self>;
 
     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
         vec![
@@ -131,7 +132,7 @@ struct Section {
 
 impl<'a> DataRequest<'a> for Section {
     type RequestData = String;
-    type ResponseData = Vec<Section>;
+    type ResponseData = Vec<Self>;
 
     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
         vec![
@@ -162,7 +163,7 @@ struct FocusTask {
 
 impl<'a> DataRequest<'a> for FocusTask {
     type RequestData = String;
-    type ResponseData = Vec<FocusTask>;
+    type ResponseData = Vec<Self>;
 
     fn segments(request_data: &'a Self::RequestData) -> Vec<String> {
         vec![
@@ -216,6 +217,35 @@ struct AddTaskToSectionRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+struct FocusTaskSubtask {
+    gid: String,
+    name: String,
+    completed: bool,
+}
+
+impl DataRequest<'_> for FocusTaskSubtask {
+    type RequestData = String;
+    type ResponseData = Vec<Self>;
+
+    fn segments(request_data: &Self::RequestData) -> Vec<String> {
+        vec![
+            "tasks".to_string(),
+            request_data.clone(),
+            "subtasks".to_string(),
+        ]
+    }
+
+    fn fields() -> &'static [&'static str] {
+        &["this.gid", "this.name", "this.completed"]
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CreateSubtaskRequest {
+    name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct FocusWeek {
     section: Section,
     from: NaiveDate,
@@ -257,6 +287,7 @@ struct FocusDay {
     date: NaiveDate,
     stats: FocusDayStats,
     diary: String,
+    subtasks: Option<Vec<FocusTaskSubtask>>,
 }
 
 impl FocusDay {
@@ -299,6 +330,12 @@ impl FocusDay {
         }
         string
     }
+
+    async fn load_subtasks(&mut self, client: &mut Client) -> anyhow::Result<&[FocusTaskSubtask]> {
+        let subtasks = client.get::<FocusTaskSubtask>(&self.task.gid).await?;
+        self.subtasks = Some(subtasks);
+        Ok(self.subtasks.as_ref().unwrap())
+    }
 }
 
 impl TryFrom<FocusTask> for FocusDay {
@@ -318,6 +355,7 @@ impl TryFrom<FocusTask> for FocusDay {
                 .context("could not find custom fields")?
                 .try_into()?,
             diary: task.notes,
+            subtasks: None,
         })
     }
 }
@@ -971,7 +1009,9 @@ async fn main() -> anyhow::Result<()> {
                 today
             };
 
-            let focus_day = get_focus_day(date, &mut client).await?;
+            term.write_str(&style("Loading focus day...").dim().to_string())?;
+            let mut focus_day = get_focus_day(date, &mut client).await?;
+            term.clear_line()?;
 
             match command {
                 Some(FocusCommand::Run) | None => {
@@ -1036,55 +1076,134 @@ async fn main() -> anyhow::Result<()> {
                         "Updated focus day diary: {new_diary_entry}",
                         new_diary_entry = new_diary_entry
                     );
+                    println!("");
 
-                    let sync_task = tokio::spawn(async move {
-                        log::info!("Deciding if there are any changes to focus data to sync...");
-                        if new_stats == focus_day.stats && new_diary_entry == focus_day.diary {
-                            log::info!("No changes to focus data to sync");
-                            return Ok::<bool, anyhow::Error>(false);
-                        }
+                    let sync_task = tokio::spawn({
+                        let client = client.clone();
+                        let focus_day = focus_day.clone();
+                        let url: Url = format!(
+                            "https://app.asana.com/api/1.0/tasks/{task_gid}",
+                            task_gid = focus_day.task.gid
+                        )
+                        .parse()
+                        .context("issue parsing focus day update request url")?;
+                        let custom_fields = new_stats
+                            .stats()
+                            .into_iter()
+                            .filter_map(|s| {
+                                if s.value().is_some() {
+                                    Some((s.field_gid().to_string(), s.value().unwrap()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
 
-                        log::info!("Sending new focus data...");
-                        client
-                            .mutate_request(
-                                Method::PUT,
-                                &format!(
-                                    "https://app.asana.com/api/1.0/tasks/{task_gid}",
-                                    task_gid = focus_day.task.gid
-                                )
-                                .parse()
-                                .context("issue parsing focus day update request url")?,
-                                DataWrapper {
-                                    data: UpdateFocusTaskCustomFieldsRequest {
-                                        notes: new_diary_entry,
-                                        custom_fields: new_stats
-                                            .stats()
-                                            .into_iter()
-                                            .filter_map(|s| {
-                                                if s.value().is_some() {
-                                                    Some((
-                                                        s.field_gid().to_string(),
-                                                        s.value().unwrap(),
-                                                    ))
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .collect(),
+                        async move {
+                            log::info!(
+                                "Deciding if there are any changes to focus data to sync..."
+                            );
+                            if new_stats == focus_day.stats && new_diary_entry == focus_day.diary {
+                                log::info!("No changes to focus data to sync");
+                                return Ok::<bool, anyhow::Error>(false);
+                            }
+
+                            log::info!("Sending new focus data...");
+                            client
+                                .mutate_request(
+                                    Method::PUT,
+                                    &url,
+                                    DataWrapper {
+                                        data: UpdateFocusTaskCustomFieldsRequest {
+                                            notes: new_diary_entry,
+                                            custom_fields,
+                                        },
                                     },
-                                },
-                            )
-                            .await?;
-                        log::debug!("Sent new focus data");
-                        Ok(true)
+                                )
+                                .await?;
+                            log::debug!("Sent new focus data");
+                            Ok(true)
+                        }
                     });
 
+                    log::info!("Loading subtasks for the focus day...");
+                    term.write_str(&style("Loading subtasks...").dim().to_string())?;
+                    focus_day.load_subtasks(&mut client).await?;
+                    term.clear_line()?;
+                    log::debug!(
+                        "Loaded {} subtasks",
+                        focus_day.subtasks.as_ref().map_or(0, |s| s.len())
+                    );
+
+                    let mut subtasks = focus_day.subtasks.clone().unwrap_or_default();
+
+                    log::info!("Asking for tasks to add to focus day...");
+                    println!("{}", style("Any tasks to do today?").bold().red());
+                    let mut subtask_tasks: Vec<tokio::task::JoinHandle<anyhow::Result<()>>> =
+                        Vec::new();
+                    let task_gid = focus_day.task.gid.clone();
+                    loop {
+                        for subtask in subtasks.iter() {
+                            println!("- {}", subtask.name);
+                        }
+
+                        let subtask_name = Input::<String>::with_theme(&ColorfulTheme::default())
+                            .with_prompt("todo")
+                            .allow_empty(true)
+                            .interact_text()?;
+                        if subtask_name.is_empty() {
+                            break;
+                        }
+
+                        subtasks.push(FocusTaskSubtask {
+                            gid: "new".to_string(),
+                            name: subtask_name.clone(),
+                            completed: false,
+                        });
+
+                        let subtask_task = tokio::spawn({
+                            let client = client.clone();
+                            let task_gid = task_gid.clone();
+                            let url: Url =
+                                format!("https://app.asana.com/api/1.0/tasks/{task_gid}/subtasks")
+                                    .parse()
+                                    .context("issue parsing subtask creation request url")?;
+
+                            async move {
+                                log::info!("Creating subtask...");
+                                client
+                                    .mutate_request(
+                                        Method::POST,
+                                        &url,
+                                        DataWrapper {
+                                            data: CreateSubtaskRequest { name: subtask_name },
+                                        },
+                                    )
+                                    .await?;
+                                log::debug!("Created subtask");
+                                Ok::<(), anyhow::Error>(())
+                            }
+                        });
+                        subtask_tasks.push(subtask_task);
+
+                        term.clear_last_lines(subtasks.len())?;
+                    }
+
                     if !sync_task.is_finished() {
-                        term.write_line(
+                        term.write_str(
                             &style("Waiting for focus data to sync...").dim().to_string(),
                         )?;
                         sync_task.await??;
-                        term.clear_last_lines(1)?;
+                        term.clear_line()?;
+                    }
+                    if subtask_tasks.iter().any(|t| !t.is_finished()) {
+                        term.write_str(
+                            &style("Waiting for subtasks to sync...").dim().to_string(),
+                        )?;
+                        for res in join_all(subtask_tasks).await.into_iter() {
+                            res??;
+                        }
+                        term.clear_line()?;
                     }
                 }
                 Some(FocusCommand::Overview) => {

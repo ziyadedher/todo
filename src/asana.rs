@@ -358,6 +358,7 @@ enum ClientError {
 /// # Ok(())
 /// # }
 /// ````
+#[derive(Clone)]
 pub struct Client {
     base_url: Url,
     credentials: Credentials,
