@@ -77,7 +77,10 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum FocusCommand {
+    /// Run the focus routine
     Run,
+    /// Print out an overview of the focus day
+    Overview,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1005,7 +1008,6 @@ async fn main() -> anyhow::Result<()> {
                         .with_initial_text(focus_day.diary.clone())
                         .allow_empty(true)
                         .interact_text()?;
-                    println!("");
                     log::debug!(
                         "Updated focus day diary: {new_diary_entry}",
                         new_diary_entry = new_diary_entry
@@ -1046,7 +1048,8 @@ async fn main() -> anyhow::Result<()> {
                             .await?;
                         log::debug!("Sent new focus data");
                     }
-
+                }
+                Some(FocusCommand::Overview) => {
                     print!(
                         "{}",
                         get_focus_day(date, &mut client).await?.to_full_string()
