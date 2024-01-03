@@ -1037,8 +1037,13 @@ async fn main() -> anyhow::Result<()> {
                         new_diary_entry = new_diary_entry
                     );
 
-                    log::info!("Deciding if there are any changes to focus data to sync...");
-                    if new_stats != focus_day.stats || new_diary_entry != focus_day.diary {
+                    let sync_task = tokio::spawn(async move {
+                        log::info!("Deciding if there are any changes to focus data to sync...");
+                        if new_stats == focus_day.stats && new_diary_entry == focus_day.diary {
+                            log::info!("No changes to focus data to sync");
+                            return Ok::<bool, anyhow::Error>(false);
+                        }
+
                         log::info!("Sending new focus data...");
                         client
                             .mutate_request(
@@ -1071,6 +1076,15 @@ async fn main() -> anyhow::Result<()> {
                             )
                             .await?;
                         log::debug!("Sent new focus data");
+                        Ok(true)
+                    });
+
+                    if !sync_task.is_finished() {
+                        term.write_line(
+                            &style("Waiting for focus data to sync...").dim().to_string(),
+                        )?;
+                        sync_task.await??;
+                        term.clear_last_lines(1)?;
                     }
                 }
                 Some(FocusCommand::Overview) => {
