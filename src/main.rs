@@ -18,9 +18,12 @@ use human_panic::setup_panic;
 use regex::Regex;
 use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
-use todo::asana::{execute_authorization_flow, Client, Credentials, DataRequest, DataWrapper};
 
-const ASANA_USER_TASK_LIST_GID: &str = "1199118625430768";
+use todo::asana::{
+    ask_for_pat, execute_authorization_flow, Client, Credentials, DataRequest, DataWrapper,
+};
+
+const ASANA_WORKSPACE_GID: &str = "1199118829113557";
 const ASANA_FOCUS_PROJECT_GID: &str = "1200179899177794";
 
 const FOCUS_WEEK_PATTERN: &str =
@@ -35,15 +38,19 @@ const START_HOUR_FOR_EOD: u32 = 20;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the cache file
-    #[arg(long, default_value = "~/.cache/todo/todo.json")]
+    #[arg(long, default_value = "~/.cache/todo/cache.json")]
     cache_path: PathBuf,
 
     /// Path to the configuration file
-    #[arg(long, default_value = "~/.config/todo/todo.toml")]
+    #[arg(long, default_value = "~/.config/todo/config.toml")]
     config_path: PathBuf,
 
-    /// Whether to use the cache or not
-    #[arg(long, default_value = "false")]
+    /// If set, uses the discouraged PAT flow (instead of OAuth)
+    #[arg(long)]
+    use_pat: bool,
+
+    /// If set, uses the cache instead of pulling from Asana
+    #[arg(long)]
     use_cache: bool,
 
     #[command(subcommand)]
@@ -86,8 +93,10 @@ enum FocusCommand {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Cache {
-    credentials: Option<Credentials>,
+    creds: Option<Credentials>,
+    user_task_list: Option<UserTaskList>,
     tasks: Option<Vec<UserTask>>,
+    last_updated: Option<DateTime<Local>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -119,8 +128,34 @@ impl<'a> DataRequest<'a> for UserTask {
         &["this.gid", "this.created_at", "this.due_on", "this.name"]
     }
 
-    fn params() -> &'a [(&'a str, &'a str)] {
-        &[("completed_since", "now")]
+    fn params() -> Vec<(&'a str, String)> {
+        vec![("completed_since", "now".to_string())]
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UserTaskList {
+    gid: String,
+}
+
+impl<'a> DataRequest<'a> for UserTaskList {
+    type RequestData = String;
+    type ResponseData = Self;
+
+    fn segments(user_gid: &'a Self::RequestData) -> Vec<String> {
+        vec![
+            "users".to_string(),
+            user_gid.clone(),
+            "user_task_list".to_string(),
+        ]
+    }
+
+    fn fields() -> &'a [&'a str] {
+        &["this.gid"]
+    }
+
+    fn params() -> Vec<(&'a str, String)> {
+        vec![("workspace", ASANA_WORKSPACE_GID.to_string())]
     }
 }
 
@@ -488,13 +523,13 @@ impl FocusDayStat {
 
     fn value(&self) -> Option<u32> {
         match self {
-            Self::Sleep(value) => *value,
-            Self::Energy(value) => *value,
-            Self::Flow(value) => *value,
-            Self::Hydration(value) => *value,
-            Self::Health(value) => *value,
-            Self::Satisfaction(value) => *value,
-            Self::Stress(value) => *value,
+            Self::Sleep(value)
+            | Self::Energy(value)
+            | Self::Flow(value)
+            | Self::Hydration(value)
+            | Self::Health(value)
+            | Self::Satisfaction(value)
+            | Self::Stress(value) => *value,
         }
     }
 
@@ -632,6 +667,7 @@ fn load_config(path: &Path) -> anyhow::Result<Config> {
     Ok(config)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<FocusDay> {
     log::info!("Getting focus sections...");
     let sections = client
@@ -670,8 +706,7 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
                 .mutate_request(
                     Method::POST,
                     &format!(
-                        "https://app.asana.com/api/1.0/projects/{project_gid}/sections",
-                        project_gid = ASANA_FOCUS_PROJECT_GID
+                        "https://app.asana.com/api/1.0/projects/{ASANA_FOCUS_PROJECT_GID}/sections"
                     )
                     .parse()
                     .context("issue parsing focus week creation request url")?,
@@ -683,7 +718,7 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
                                 to = week.last_day().format("%Y-%m-%d")
                             ),
                             insert_before: focus_weeks
-                                .get(0)
+                                .first()
                                 .context("unable to get any focus weeks")?
                                 .section
                                 .gid
@@ -740,14 +775,15 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
         let current_day: FocusDay = client
             .mutate_request(
                 Method::POST,
-                &format!("https://app.asana.com/api/1.0/tasks")
+                &"https://app.asana.com/api/1.0/tasks"
+                    .to_string()
                     .parse()
                     .context("issue parsing focus day creation request url")?,
                 DataWrapper {
                     data: CreateSectionTaskRequest {
                         name: format!(
                             "Daily Focus for {day} ({date})",
-                            day = day.weekday().to_string(),
+                            day = day.weekday(),
                             date = day.format("%Y-%m-%d")
                         ),
                         projects: vec![ASANA_FOCUS_PROJECT_GID.to_string()],
@@ -806,54 +842,119 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
     Ok(current_day)
 }
 
+fn task_or_tasks(num: usize) -> String {
+    if num == 1 {
+        "1 task".to_string()
+    } else {
+        format!("{num} tasks")
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     setup_panic!();
     env_logger::init();
 
+    let term = Term::stdout();
+
     log::debug!("Parsing command line arguments...");
     let args = Args::parse();
     log::trace!("Parsed command line arguments: {args:#?}");
 
-    let cache = load_cache(&expand_homedir(&args.cache_path)?)?;
-    let _config = load_config(&expand_homedir(&args.config_path)?)?;
+    let cache_path = expand_homedir(&args.cache_path)?;
+    let config_path = expand_homedir(&args.config_path)?;
 
-    let credentials = if let Some(credentials) = &cache.credentials {
-        credentials.clone()
+    let mut cache = load_cache(&cache_path)?;
+    let _config = load_config(&config_path)?;
+
+    if args.use_cache {
+        log::debug!("Using cache, ensuring that we've updated recently...");
+        if let Some(last_updated) = cache.last_updated {
+            log::debug!(
+                "Cache last updated at {last_updated}, checking if we should update...",
+                last_updated = last_updated
+            );
+            if Local::now() - last_updated < chrono::Duration::minutes(3) {
+                log::debug!("Cache is recent enough, we're good.");
+            } else {
+                log::warn!("Cache is not recent enough, letting the user know...");
+                term.write_line(
+                    &style("Warning: cache has not been updated in more than 3 minutes, is the update command in the background? See the README.md")
+                        .red()
+                        .to_string(),
+                )?;
+            }
+        } else {
+            log::warn!("Cache has never been updated, letting the user know...");
+            term.write_line(
+                &style(
+                    "Warning: cache has never been updated, is caching working? See the README.md",
+                )
+                .red()
+                .to_string(),
+            )?;
+        }
+    }
+
+    let creds = if args.use_pat {
+        if let Some(Credentials::PersonalAccessToken(pat)) = &cache.creds {
+            Credentials::PersonalAccessToken(pat.clone())
+        } else {
+            let creds = ask_for_pat()?;
+            cache.creds = Some(creds.clone());
+            save_cache(&cache_path, &cache)?;
+            creds
+        }
+    } else if let Some(Credentials::OAuth2 {
+        access_token,
+        refresh_token,
+    }) = &cache.creds
+    {
+        Credentials::OAuth2 {
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+        }
     } else {
-        let credentials = execute_authorization_flow().await?;
-        let cache = cache.clone();
-        save_cache(
-            &expand_homedir(&args.cache_path)?,
-            &Cache {
-                credentials: Some(credentials.clone()),
-                ..cache
-            },
-        )?;
-        credentials
+        let creds = execute_authorization_flow().await?;
+        cache.creds = Some(creds.clone());
+        save_cache(&cache_path, &cache)?;
+        creds
     };
-    let mut client = Client::new(credentials)?;
+
+    let mut client = Client::new(creds)?;
+
+    log::info!("Getting user task list..");
+    let user_task_list =
+        if let (Some(user_task_list), true) = (cache.user_task_list.clone(), args.use_cache) {
+            log::debug!("Using cached user task list...");
+            user_task_list
+        } else {
+            let user_task_list = client.get::<UserTaskList>(&"me".to_string()).await?;
+            log::debug!("Saving new user task list to cache...");
+            cache.user_task_list = Some(user_task_list.clone());
+            save_cache(&cache_path, &cache)?;
+            user_task_list
+        };
+    log::debug!("Got user task list: {user_task_list:#?}");
 
     log::info!("Getting tasks...");
-    let tasks = if let (true, Some(tasks)) = (args.use_cache, cache.tasks) {
+    let tasks = if let (Some(tasks), true) = (cache.tasks.clone(), args.use_cache) {
         log::debug!("Using cached tasks...");
         tasks
     } else {
         log::debug!("Getting tasks from Asana...");
-        client
-            .get::<UserTask>(&ASANA_USER_TASK_LIST_GID.to_string())
-            .await?
+        let tasks = client
+            .get::<UserTask>(&user_task_list.gid.to_string())
+            .await?;
+
+        log::debug!("Saving new tasks to cache...");
+        cache.tasks = Some(tasks.clone());
+        save_cache(&cache_path, &cache)?;
+        tasks
     };
     log::debug!("Got {} tasks", tasks.len());
     log::trace!("Tasks: {tasks:#?}");
-
-    fn task_or_tasks(num: usize) -> String {
-        if num == 1 {
-            "1 task".to_string()
-        } else {
-            format!("{num} tasks")
-        }
-    }
 
     let now = Local::now();
     let today = now.date_naive();
@@ -894,8 +995,6 @@ async fn main() -> anyhow::Result<()> {
         due_week_tasks = due_week_tasks.len()
     );
 
-    let term = Term::stdout();
-
     match args.command {
         Command::Summary => {
             log::info!("Producing a summary of tasks...");
@@ -934,7 +1033,11 @@ async fn main() -> anyhow::Result<()> {
 
             term.write_line(&format!(
                 "{string} {}",
-                style("(https://app.asana.com/0/{ASANA_USER_TASK_LIST_GID}/list)").dim()
+                style(format!(
+                    "(https://app.asana.com/0/{user_task_list_gid}/list)",
+                    user_task_list_gid = user_task_list.gid
+                ))
+                .dim()
             ))?;
         }
 
@@ -1041,7 +1144,9 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     let mut new_stats = focus_day.stats.clone();
-                    if !unfilled_stats_at_this_time.is_empty() {
+                    if unfilled_stats_at_this_time.is_empty() {
+                        println!("{}\n", style("All caught up on stats!").bold().green());
+                    } else {
                         log::info!("Updating focus day stats...");
                         println!("{}", style("Time to fill out some stats!").bold().cyan());
                         for stat in unfilled_stats_at_this_time {
@@ -1059,13 +1164,11 @@ async fn main() -> anyhow::Result<()> {
                             new_stat.set_value(Some(value));
                             new_stats.set_stat(new_stat);
                         }
-                        println!("");
+                        println!();
                         log::debug!(
                             "Updated focus day stats: {new_stats:#?}",
                             new_stats = new_stats
                         );
-                    } else {
-                        println!("{}\n", style("All caught up on stats!").bold().green());
                     }
 
                     log::info!("Updating focus day diary...");
@@ -1079,7 +1182,7 @@ async fn main() -> anyhow::Result<()> {
                         "Updated focus day diary: {new_diary_entry}",
                         new_diary_entry = new_diary_entry
                     );
-                    println!("");
+                    println!();
 
                     let sync_task = tokio::spawn({
                         let client = client.clone();
@@ -1135,7 +1238,7 @@ async fn main() -> anyhow::Result<()> {
                     term.clear_line()?;
                     log::debug!(
                         "Loaded {} subtasks",
-                        focus_day.subtasks.as_ref().map_or(0, |s| s.len())
+                        focus_day.subtasks.as_ref().map_or(0, Vec::len)
                     );
 
                     let mut subtasks = focus_day.subtasks.clone().unwrap_or_default();
@@ -1146,7 +1249,7 @@ async fn main() -> anyhow::Result<()> {
                         Vec::new();
                     let task_gid = focus_day.task.gid.clone();
                     loop {
-                        for subtask in subtasks.iter() {
+                        for subtask in &subtasks {
                             println!("- {}", subtask.name);
                         }
 
@@ -1207,7 +1310,7 @@ async fn main() -> anyhow::Result<()> {
                         term.write_str(
                             &style("Waiting for subtasks to sync...").dim().to_string(),
                         )?;
-                        for res in join_all(subtask_tasks).await.into_iter() {
+                        for res in join_all(subtask_tasks).await {
                             res??;
                         }
                         term.clear_line()?;
@@ -1217,7 +1320,7 @@ async fn main() -> anyhow::Result<()> {
                     print!(
                         "{}",
                         get_focus_day(date, &mut client).await?.to_full_string()
-                    )
+                    );
                 }
             }
         }
@@ -1225,15 +1328,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Update => {
             log::info!("Updating cache...");
             let tasks = client
-                .get::<UserTask>(&ASANA_USER_TASK_LIST_GID.to_string())
+                .get::<UserTask>(&user_task_list.gid.to_string())
                 .await?;
-            save_cache(
-                &expand_homedir(&args.cache_path)?,
-                &Cache {
-                    tasks: Some(tasks),
-                    credentials: Some(client.credentials().clone()),
-                },
-            )?;
+            cache.tasks = Some(tasks.clone());
+            cache.last_updated = Some(Local::now());
+            save_cache(&cache_path, &cache)?;
         }
     }
 

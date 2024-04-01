@@ -9,10 +9,9 @@
 //! along with some information about when they were created and when they are due.
 //!
 //! ```no_run
-//! # use asana_api::asana::{Client, DataRequest};
 //! # use serde::{Deserialize, Serialize};
+//! # use todo::asana::{Client, DataRequest};
 //! # use todo::asana::execute_authorization_flow;
-//!
 //! #[derive(Debug, Deserialize, Serialize)]
 //! struct Task {
 //!     gid: String,
@@ -39,8 +38,8 @@
 //!         &["this.gid", "this.created_at", "this.due_on", "this.name"]
 //!     }
 //!
-//!     fn params() -> &'a [(&'a str, &'a str)] {
-//!         &[("completed_since", "now")]
+//!     fn params() -> Vec<(&'a str, String)> {
+//!         vec![("completed_since", "now".to_string())]
 //!     }
 //! }
 //!
@@ -56,35 +55,90 @@
 //!
 //! - [Asana API documentation](https://developers.asana.com/docs)
 
-use std::io::{self, Write};
-
 use anyhow::Context;
 use chrono::{DateTime, Duration, Local};
+use console::{style, Term};
+use dialoguer::{theme::ColorfulTheme, Input};
 use oauth2::{reqwest::async_http_client, TokenResponse};
 use reqwest::{Method, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
-const ASANA_API_BASE_URL: &str = "https://app.asana.com/api/1.0/";
-const ASANA_OAUTH_AUTHORIZATION_URL: &str = "https://app.asana.com/-/oauth_authorize";
-const ASANA_OAUTH_TOKEN_URL: &str = "https://app.asana.com/-/oauth_token";
-const ASANA_OAUTH_LOCAL_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
+const API_BASE_URL: &str = "https://app.asana.com/api/1.0/";
+const OAUTH_AUTHORIZATION_URL: &str = "https://app.asana.com/-/oauth_authorize";
+const OAUTH_TOKEN_URL: &str = "https://app.asana.com/-/oauth_token";
+const OAUTH_LOCAL_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
-const ASANA_APP_CLIENT_ID: &str = "1206215514588292";
-const ASANA_APP_CLIENT_SECRET: &str = "8c7ea1c603de8462a3ba24f827ff1658";
+const APP_CLIENT_ID: &str = "1206215514588292";
+const APP_CLIENT_SECRET: &str = "8c7ea1c603de8462a3ba24f827ff1658";
 
 /// Comprehensive set of authorization credentials for the client.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Credentials {
     /// OAuth2 authorization credentials for the client.
     OAuth2 {
-        /// OAuth2 access token, read more at https://oauth.net/2/access-tokens/
+        /// OAuth2 access token, read more at <https://oauth.net/2/access-tokens/>
         access_token: String,
-        /// OAuth2 refresh token, read more at https://oauth.net/2/refresh-tokens/
+        /// OAuth2 refresh token, read more at <https://oauth.net/2/refresh-tokens/>
         refresh_token: Option<String>,
     },
-    /// Personal access token, read more at https://developers.asana.com/docs/personal-access-token
+    /// Personal access token, read more at <https://developers.asana.com/docs/personal-access-token>
     PersonalAccessToken(String),
+}
+
+fn setup_oauth_client() -> anyhow::Result<oauth2::basic::BasicClient> {
+    log::debug!("Setting up OAuth client...");
+    Ok(oauth2::basic::BasicClient::new(
+        oauth2::ClientId::new(APP_CLIENT_ID.to_string()),
+        Some(oauth2::ClientSecret::new(APP_CLIENT_SECRET.to_string())),
+        oauth2::AuthUrl::new(OAUTH_AUTHORIZATION_URL.to_string())?,
+        Some(oauth2::TokenUrl::new(OAUTH_TOKEN_URL.to_string())?),
+    )
+    .set_redirect_uri(oauth2::RedirectUrl::new(
+        OAUTH_LOCAL_REDIRECT_URI.to_string(),
+    )?))
+}
+
+/// Ask the user for a personal access token.
+///
+/// This opens the user's browser to the Asana personal access token page and prompts the user to enter the personal
+/// access token they got from the page. Note that the personal access token flow is discouraged, and the OAuth flow
+/// should be used instead.
+///
+/// # Errors
+///
+/// This function will return an error if the user could not be prompted for the personal access token.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use todo::asana::ask_for_pat;
+/// # async fn run() -> anyhow::Result<()> {
+/// let pat = ask_for_pat()?;
+/// # Ok(())
+/// # }
+/// ```
+/// # See Also
+///
+/// - [Asana API PAT documentation](https://developers.asana.com/docs/personal-access-token)
+pub fn ask_for_pat() -> anyhow::Result<Credentials> {
+    let pat_page_url = Url::parse("https://app.asana.com/0/my-apps")?;
+
+    log::info!("Opening browser to PAT page...");
+    Term::stdout().write_line(
+      &style(format!(
+          "Opening your browser and sending you to {pat_page_url}...\nGenerate a new personal access token, and once you're done, come back here and post the token you got."
+      ))
+      .dim()
+      .to_string(),
+  )?;
+    open::that_detached(pat_page_url.to_string())
+        .context("could not PAT page URL in the browser")?;
+
+    let pat = Input::<String>::with_theme(&ColorfulTheme::default())
+        .with_prompt("personal access token")
+        .interact_text()?;
+    Ok(Credentials::PersonalAccessToken(pat))
 }
 
 /// Execute the full `OAuth2` authorization flow.
@@ -100,7 +154,7 @@ pub enum Credentials {
 /// # Examples
 ///
 /// ```no_run
-/// # use asana_api::asana::execute_authorization_flow;
+/// # use todo::asana::execute_authorization_flow;
 /// # async fn run() -> anyhow::Result<()> {
 /// let credentials = execute_authorization_flow().await?;
 /// # Ok(())
@@ -118,18 +172,9 @@ pub enum Credentials {
 /// - [OAuth2 RFC](https://tools.ietf.org/html/rfc6749)
 /// - [OAuth2 for Native Apps RFC](https://tools.ietf.org/html/rfc8252)
 pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
-    log::debug!("Setting up OAuth client and authorization request...");
-    let oauth_client = oauth2::basic::BasicClient::new(
-        oauth2::ClientId::new(ASANA_APP_CLIENT_ID.to_string()),
-        Some(oauth2::ClientSecret::new(
-            ASANA_APP_CLIENT_SECRET.to_string(),
-        )),
-        oauth2::AuthUrl::new(ASANA_OAUTH_AUTHORIZATION_URL.to_string())?,
-        Some(oauth2::TokenUrl::new(ASANA_OAUTH_TOKEN_URL.to_string())?),
-    )
-    .set_redirect_uri(oauth2::RedirectUrl::new(
-        ASANA_OAUTH_LOCAL_REDIRECT_URI.to_string(),
-    )?);
+    let oauth_client = setup_oauth_client()?;
+
+    log::debug!("Setting up authorization request...");
     let (pkce_challenge, pkce_verifier) = oauth2::PkceCodeChallenge::new_random_sha256();
     let (auth_url, _) = oauth_client
         .authorize_url(oauth2::CsrfToken::new_random)
@@ -137,17 +182,20 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
         .url();
 
     log::info!("Opening browser to authorization URL...");
-    println!("Opening your browser and sending you to {auth_url}...");
+    Term::stdout().write_line(
+        &style(format!(
+            "Opening your browser and sending you to {auth_url}...\nOnce you're done, come back here and post the code you got."
+        ))
+        .dim()
+        .to_string(),
+    )?;
     open::that_detached(auth_url.to_string())
         .context("could not open authorization URL in the browser")?;
 
     log::info!("Waiting for user to provide the authorization code...");
-    print!("Once you're done, come back here and post the code you got: ");
-    io::stdout().flush().context("could not flush stdout")?;
-    let mut auth_code = String::new();
-    io::stdin()
-        .read_line(&mut auth_code)
-        .context("could not read authorization code from stdin")?;
+    let auth_code = Input::<String>::with_theme(&ColorfulTheme::default())
+        .with_prompt("auth code")
+        .interact_text()?;
 
     log::info!("Exchanging authorization code for an access token...");
     let token = oauth_client
@@ -175,7 +223,7 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
 /// # Examples
 ///
 /// ```no_run
-/// # use asana_api::asana::refresh_authorization;
+/// # use todo::asana::refresh_authorization;
 /// # async fn run() -> anyhow::Result<()> {
 /// let credentials = refresh_authorization(&"refresh_token".to_string()).await?;
 /// # Ok(())
@@ -192,19 +240,7 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
 pub async fn refresh_authorization(
     refresh_token: &oauth2::RefreshToken,
 ) -> anyhow::Result<Credentials> {
-    log::debug!("Setting up OAuth client...");
-    let oauth_client = oauth2::basic::BasicClient::new(
-        oauth2::ClientId::new(ASANA_APP_CLIENT_ID.to_string()),
-        Some(oauth2::ClientSecret::new(
-            ASANA_APP_CLIENT_SECRET.to_string(),
-        )),
-        oauth2::AuthUrl::new(ASANA_OAUTH_AUTHORIZATION_URL.to_string())?,
-        Some(oauth2::TokenUrl::new(ASANA_OAUTH_TOKEN_URL.to_string())?),
-    )
-    .set_redirect_uri(oauth2::RedirectUrl::new(
-        ASANA_OAUTH_LOCAL_REDIRECT_URI.to_string(),
-    )?);
-
+    let oauth_client = setup_oauth_client()?;
     let token = oauth_client
         .exchange_refresh_token(refresh_token)
         .request_async(async_http_client)
@@ -232,7 +268,7 @@ pub async fn refresh_authorization(
 /// incomplete tasks in a user's task list.
 ///
 /// ```no_run
-/// # use asana_api::asana::DataRequest;
+/// # use todo::asana::DataRequest;
 /// # use serde::{Deserialize, Serialize};
 ///
 /// #[derive(Deserialize, Serialize)]
@@ -256,8 +292,8 @@ pub async fn refresh_authorization(
 ///         &["this.name"]
 ///     }
 ///
-///     fn params() -> &'a [(&'a str, &'a str)] {
-///         &[("completed_since", "now")]
+///     fn params() -> Vec<(&'a str, String)> {
+///         vec![("completed_since", "now".to_string())]
 ///     }
 /// }
 /// ```
@@ -285,8 +321,8 @@ pub trait DataRequest<'a> {
 
     /// Get any additional query parameters to use when making the request.
     #[must_use]
-    fn params() -> &'a [(&'a str, &'a str)] {
-        &[]
+    fn params() -> Vec<(&'a str, String)> {
+        vec![]
     }
 }
 
@@ -312,7 +348,7 @@ enum ClientError {
 /// also handles the serialization and deserialization of data to and from the Asana API.
 ///
 /// The primary entry point for this client is the [`get`](Client::get) method, which is used to make requests to the
-/// Asana API. This method is based on a type that implements the [`DataRequest`](DataRequest) trait, which is used to
+/// Asana API. This method is based on a type that implements the [`DataRequest`] trait, which is used to
 /// specify the data that is required to make the request, the data that is returned by the request, and the fields to
 /// query the Asana API for.
 ///
@@ -321,7 +357,7 @@ enum ClientError {
 /// The following example shows how to use the client to get all the names of incomplete tasks in a user's task list.
 ///
 /// ```no_run
-/// # use asana_api::asana::{Client, DataRequest};
+/// # use todo::asana::{Client, DataRequest};
 /// # use serde::{Deserialize, Serialize};
 /// # use todo::asana::execute_authorization_flow;
 ///
@@ -346,8 +382,8 @@ enum ClientError {
 ///         &["this.name"]
 ///     }
 ///
-///     fn params() -> &'a [(&'a str, &'a str)] {
-///         &[("completed_since", "now")]
+///     fn params() -> Vec<(&'a str, String)> {
+///         vec![("completed_since", "now".to_string())]
 ///     }
 /// }
 ///
@@ -404,7 +440,7 @@ impl Client {
     /// # Examples
     ///
     /// ```no_run
-    /// # use asana_api::asana::Client;
+    /// # use todo::asana::Client;
     /// # use todo::asana::execute_authorization_flow;
     /// # async fn run() -> anyhow::Result<()> {
     /// let credentials = execute_authorization_flow().await?;
@@ -445,7 +481,7 @@ impl Client {
     /// # Examples
     ///
     /// ```no_run
-    /// # use asana_api::asana::Client;
+    /// # use todo::asana::Client;
     /// # use todo::asana::execute_authorization_flow;
     /// # async fn run() -> anyhow::Result<()> {
     /// let credentials = execute_authorization_flow().await?;
@@ -456,7 +492,7 @@ impl Client {
     pub fn new(credentials: Credentials) -> anyhow::Result<Client> {
         log::debug!("Setting up Asana client...");
         Ok(Client {
-            base_url: Url::parse(ASANA_API_BASE_URL)?,
+            base_url: Url::parse(API_BASE_URL)?,
             inner_client: Client::construct_inner_client()?,
             credentials,
             last_refresh_attempt: None,
@@ -480,7 +516,7 @@ impl Client {
     /// # Examples
     ///
     /// ```no_run
-    /// # use asana_api::asana::Client;
+    /// # use todo::asana::Client;
     /// # use todo::asana::execute_authorization_flow;
     /// # async fn run() -> anyhow::Result<()> {
     /// let credentials = execute_authorization_flow().await?;
@@ -511,17 +547,16 @@ impl Client {
                 Ok(())
             }
 
-            _ => {
-                return Err(ClientError::UnableToRefreshAccessToken(
-                    "not using OAuth2 flow".to_string(),
-                ))?
-            }
+            Credentials::PersonalAccessToken(_pat) => Err(ClientError::UnableToRefreshAccessToken(
+                "not using OAuth2 flow".to_string(),
+            )
+            .into()),
         }
     }
 
     /// Make a request to the Asana API.
     ///
-    /// See documentation for [`DataRequest`](DataRequest) and [`Client`](Client) for more information on how to use
+    /// See documentation for [`DataRequest`] and [`Client`] for more information on how to use
     /// this method.
     ///
     /// # Errors
@@ -535,7 +570,7 @@ impl Client {
         let mut url = self.base_url.join(&D::segments(request_data).join("/"))?;
 
         let fields = D::fields().join(",");
-        let query = &[D::params(), &[("opt_fields", &fields)]].concat();
+        let query = &[D::params(), vec![("opt_fields", fields)]].concat();
         url.query_pairs_mut().extend_pairs(query).finish();
 
         log::debug!("Making a request to {url}...");
