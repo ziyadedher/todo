@@ -96,6 +96,7 @@ struct Cache {
     creds: Option<Credentials>,
     user_task_list: Option<UserTaskList>,
     tasks: Option<Vec<UserTask>>,
+    focus_day: Option<FocusDay>,
     last_updated: Option<DateTime<Local>>,
 }
 
@@ -998,8 +999,8 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Summary => {
             log::info!("Producing a summary of tasks...");
-            let mut string = String::new();
-            string.push_str(&match (overdue_tasks.len(), due_today_tasks.len()) {
+            let mut task_summary = String::new();
+            task_summary.push_str(&match (overdue_tasks.len(), due_today_tasks.len()) {
                 (0, 0) => style("Nice! Everything done for now!")
                     .green()
                     .bold()
@@ -1021,7 +1022,7 @@ async fn main() -> anyhow::Result<()> {
                 .to_string(),
             });
 
-            string.push_str(&match due_week_tasks.len() {
+            task_summary.push_str(&match due_week_tasks.len() {
                 0 => String::new(),
                 w => style(format!(
                     " You have another {} due within a week.",
@@ -1032,13 +1033,55 @@ async fn main() -> anyhow::Result<()> {
             });
 
             term.write_line(&format!(
-                "{string} {}",
+                "{task_summary} {}",
                 style(format!(
                     "(https://app.asana.com/0/{user_task_list_gid}/list)",
                     user_task_list_gid = user_task_list.gid
                 ))
                 .dim()
             ))?;
+
+            log::info!("Checking for focus...");
+            if let Some(focus_day) = &cache.focus_day {
+                if focus_day.date == today {
+                    let missing_morning = focus_day.stats.sleep.value().is_none()
+                        || focus_day.stats.energy.value().is_none();
+                    let missing_evening = now.hour() >= START_HOUR_FOR_EOD
+                        && focus_day.stats.stats().iter().any(|s| match s {
+                            FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => false,
+                            _ => s.value().is_none(),
+                        });
+
+                    if missing_morning || missing_evening {
+                        let mut focus_summary = String::new();
+
+                        if missing_morning && missing_evening {
+                            focus_summary.push_str(
+                                &style("Don't forget your focus for the day!")
+                                    .yellow()
+                                    .to_string(),
+                            );
+                        } else if missing_morning {
+                            focus_summary.push_str(
+                                &style("🌅 Don't forget to fill out your morning focus!")
+                                    .yellow()
+                                    .to_string(),
+                            );
+                        } else if missing_evening {
+                            focus_summary.push_str(
+                                &style("🌙 Time for your evening focus reflection!")
+                                    .yellow()
+                                    .to_string(),
+                            );
+                        }
+
+                        term.write_line(&format!(
+                            "{focus_summary} {}",
+                            style("(run `todo focus` to fill out focus data)").dim()
+                        ))?;
+                    }
+                }
+            }
         }
 
         Command::List => {
@@ -1330,7 +1373,10 @@ async fn main() -> anyhow::Result<()> {
             let tasks = client
                 .get::<UserTask>(&user_task_list.gid.to_string())
                 .await?;
+            let focus_day = get_focus_day(Local::now().date_naive(), &mut client).await?;
+
             cache.tasks = Some(tasks.clone());
+            cache.focus_day = Some(focus_day);
             cache.last_updated = Some(Local::now());
             save_cache(&cache_path, &cache)?;
         }
