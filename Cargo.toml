@@ -1,26 +1,24 @@
 [package]
 name = "todo"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-anyhow = "1.0.75"
-chrono = { version = "0.4.31", features = ["serde"] }
-clap = { version = "4.4.11", features = ["derive"] }
-console = "0.15.7"
+anyhow = "1.0.93"
+chrono = { version = "0.4.38", features = ["serde"] }
+clap = { version = "4.5.21", features = ["derive"] }
+console = "0.15.8"
 dialoguer = "0.11.0"
-env_logger = "0.10.1"
-futures = "0.3.30"
-human-panic = "1.2.2"
-log = "0.4.20"
+env_logger = "0.11.5"
+futures = "0.3.31"
+human-panic = "2.0.2"
+log = "0.4.22"
 oauth2 = "4.4.2"
-open = "5.0.1"
-regex = "1.10.2"
-reqwest = { version = "0.11.23", features = ["json"] }
-serde = "1.0.193"
-serde_json = "1.0.108"
-thiserror = "1.0.51"
-tokio = { version = "1.35.1", features = ["full"] }
-toml = "0.8.8"
+open = "5.3.1"
+regex = "1.11.1"
+reqwest = { version = "0.12.9", features = ["json"] }
+serde = "1.0.215"
+serde_json = "1.0.133"
+thiserror = "2.0.3"
+tokio = { version = "1.41.1", features = ["full"] }
+toml = "0.8.19"
