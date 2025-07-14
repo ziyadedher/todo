@@ -1042,44 +1042,49 @@ async fn main() -> anyhow::Result<()> {
             ))?;
 
             log::info!("Checking for focus...");
-            if let Some(focus_day) = &cache.focus_day {
-                if focus_day.date == today {
-                    let missing_morning = focus_day.stats.sleep.value().is_none()
-                        || focus_day.stats.energy.value().is_none();
-                    let missing_evening = now.hour() >= START_HOUR_FOR_EOD
-                        && focus_day.stats.stats().iter().any(|s| match s {
-                            FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => false,
-                            _ => s.value().is_none(),
-                        });
+            let focus_day = if let (Some(focus_day), true) = (&cache.focus_day, args.use_cache) {
+                focus_day.clone()
+            } else {
+                log::info!("No focus day in cache, fetching from Asana...");
+                get_focus_day(today, &mut client).await?
+            };
 
-                    if missing_morning || missing_evening {
-                        let mut focus_summary = String::new();
+            if focus_day.date == today {
+                let missing_morning = focus_day.stats.sleep.value().is_none()
+                    || focus_day.stats.energy.value().is_none();
+                let missing_evening = now.hour() >= START_HOUR_FOR_EOD
+                    && focus_day.stats.stats().iter().any(|s| match s {
+                        FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => false,
+                        _ => s.value().is_none(),
+                    });
 
-                        if missing_morning && missing_evening {
-                            focus_summary.push_str(
-                                &style("Don't forget your focus for the day!")
-                                    .yellow()
-                                    .to_string(),
-                            );
-                        } else if missing_morning {
-                            focus_summary.push_str(
-                                &style("🌅 Don't forget to fill out your morning focus!")
-                                    .yellow()
-                                    .to_string(),
-                            );
-                        } else if missing_evening {
-                            focus_summary.push_str(
-                                &style("🌙 Time for your evening focus reflection!")
-                                    .yellow()
-                                    .to_string(),
-                            );
-                        }
+                if missing_morning || missing_evening {
+                    let mut focus_summary = String::new();
 
-                        term.write_line(&format!(
-                            "{focus_summary} {}",
-                            style("(run `todo focus` to fill out focus data)").dim()
-                        ))?;
+                    if missing_morning && missing_evening {
+                        focus_summary.push_str(
+                            &style("Don't forget your focus for the day!")
+                                .yellow()
+                                .to_string(),
+                        );
+                    } else if missing_morning {
+                        focus_summary.push_str(
+                            &style("Time for your morning reflection.")
+                                .yellow()
+                                .to_string(),
+                        );
+                    } else if missing_evening {
+                        focus_summary.push_str(
+                            &style("Time for your evening reflection.")
+                                .yellow()
+                                .to_string(),
+                        );
                     }
+
+                    term.write_line(&format!(
+                        "{focus_summary} {}",
+                        style("(run `todo focus` to fill out focus data)").dim()
+                    ))?;
                 }
             }
         }
