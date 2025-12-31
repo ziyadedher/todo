@@ -59,7 +59,7 @@ use anyhow::Context;
 use chrono::{DateTime, Duration, Local};
 use console::{style, Term};
 use dialoguer::{theme::ColorfulTheme, Input};
-use oauth2::{reqwest::async_http_client, TokenResponse};
+use oauth2::TokenResponse;
 use reqwest::{Method, StatusCode, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
@@ -71,6 +71,36 @@ const OAUTH_LOCAL_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
 const APP_CLIENT_ID: &str = "1206215514588292";
 const APP_CLIENT_SECRET: &str = "8c7ea1c603de8462a3ba24f827ff1658";
+
+/// Type alias for a fully configured OAuth2 client with auth and token endpoints set.
+type ConfiguredOAuthClient = oauth2::Client<
+    oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>,
+    oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
+    oauth2::StandardTokenIntrospectionResponse<
+        oauth2::EmptyExtraTokenFields,
+        oauth2::basic::BasicTokenType,
+    >,
+    oauth2::StandardRevocableToken,
+    oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>,
+    oauth2::EndpointSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointSet,
+>;
+
+fn setup_oauth_client() -> anyhow::Result<ConfiguredOAuthClient> {
+    log::debug!("Setting up OAuth client...");
+    Ok(
+        oauth2::basic::BasicClient::new(oauth2::ClientId::new(APP_CLIENT_ID.to_string()))
+            .set_client_secret(oauth2::ClientSecret::new(APP_CLIENT_SECRET.to_string()))
+            .set_auth_uri(oauth2::AuthUrl::new(OAUTH_AUTHORIZATION_URL.to_string())?)
+            .set_token_uri(oauth2::TokenUrl::new(OAUTH_TOKEN_URL.to_string())?)
+            .set_redirect_uri(oauth2::RedirectUrl::new(
+                OAUTH_LOCAL_REDIRECT_URI.to_string(),
+            )?),
+    )
+}
 
 /// Comprehensive set of authorization credentials for the client.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -84,19 +114,6 @@ pub enum Credentials {
     },
     /// Personal access token, read more at <https://developers.asana.com/docs/personal-access-token>
     PersonalAccessToken(String),
-}
-
-fn setup_oauth_client() -> anyhow::Result<oauth2::basic::BasicClient> {
-    log::debug!("Setting up OAuth client...");
-    Ok(oauth2::basic::BasicClient::new(
-        oauth2::ClientId::new(APP_CLIENT_ID.to_string()),
-        Some(oauth2::ClientSecret::new(APP_CLIENT_SECRET.to_string())),
-        oauth2::AuthUrl::new(OAUTH_AUTHORIZATION_URL.to_string())?,
-        Some(oauth2::TokenUrl::new(OAUTH_TOKEN_URL.to_string())?),
-    )
-    .set_redirect_uri(oauth2::RedirectUrl::new(
-        OAUTH_LOCAL_REDIRECT_URI.to_string(),
-    )?))
 }
 
 /// Ask the user for a personal access token.
@@ -198,10 +215,11 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
         .interact_text()?;
 
     log::info!("Exchanging authorization code for an access token...");
+    let http_client = oauth2::reqwest::Client::new();
     let token = oauth_client
         .exchange_code(oauth2::AuthorizationCode::new(auth_code.trim().to_string()))
         .set_pkce_verifier(pkce_verifier)
-        .request_async(async_http_client)
+        .request_async(&http_client)
         .await
         .context("could not exchange authorization code for an access token")?;
     let credentials = Credentials::OAuth2 {
@@ -241,9 +259,10 @@ pub async fn refresh_authorization(
     refresh_token: &oauth2::RefreshToken,
 ) -> anyhow::Result<Credentials> {
     let oauth_client = setup_oauth_client()?;
+    let http_client = oauth2::reqwest::Client::new();
     let token = oauth_client
         .exchange_refresh_token(refresh_token)
-        .request_async(async_http_client)
+        .request_async(&http_client)
         .await
         .context("could not exchange refresh token for an access token")?;
     let credentials = Credentials::OAuth2 {
