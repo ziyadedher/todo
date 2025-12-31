@@ -81,6 +81,41 @@ enum Command {
 
     /// Pull and cache information about todo task and focus, without printing anything
     Update,
+
+    /// Output machine-readable status for integrations (tmux, menubar, etc.)
+    Status {
+        /// Output format
+        #[arg(long, default_value = "tmux")]
+        format: StatusFormat,
+    },
+
+    /// Install shell/system integrations
+    Install {
+        #[command(subcommand)]
+        integration: InstallIntegration,
+    },
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum StatusFormat {
+    /// Short format for tmux status bar
+    Tmux,
+    /// JSON format for programmatic use
+    Json,
+    /// xbar/SwiftBar format for macOS menu bar
+    Xbar,
+}
+
+#[derive(Debug, Subcommand)]
+enum InstallIntegration {
+    /// Print tmux configuration snippet
+    Tmux,
+    /// Install xbar/SwiftBar plugin (macOS only)
+    Xbar,
+    /// Install launchd notification agents (macOS only)
+    Notifications,
+    /// Show all available integrations and their status
+    Show,
 }
 
 #[derive(Debug, Subcommand)]
@@ -100,8 +135,83 @@ struct Cache {
     last_updated: Option<DateTime<Local>>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct Config {}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct Config {
+    tmux: TmuxConfig,
+    menubar: MenubarConfig,
+    notifications: NotificationsConfig,
+    terminal: TerminalConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            tmux: TmuxConfig::default(),
+            menubar: MenubarConfig::default(),
+            notifications: NotificationsConfig::default(),
+            terminal: TerminalConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct TmuxConfig {
+    enabled: bool,
+}
+
+impl Default for TmuxConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct MenubarConfig {
+    enabled: bool,
+    refresh_seconds: u32,
+}
+
+impl Default for MenubarConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_seconds: 60,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct NotificationsConfig {
+    enabled: bool,
+    morning_time: String,
+    evening_time: String,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            morning_time: "09:00".to_string(),
+            evening_time: "20:00".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+struct TerminalConfig {
+    blocking: bool,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self { blocking: false }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct UserTask {
@@ -590,6 +700,124 @@ impl Display for FocusDayStat {
     }
 }
 
+/// Represents the current focus status for integrations
+#[derive(Clone, Debug, Serialize)]
+struct FocusStatus {
+    /// Whether morning reflection (sleep/energy) is complete
+    morning_done: bool,
+    /// Whether evening reflection is complete (only relevant after START_HOUR_FOR_EOD)
+    evening_done: bool,
+    /// Whether it's currently evening time
+    is_evening: bool,
+    /// Number of overdue tasks
+    overdue_count: usize,
+    /// Number of tasks due today
+    due_today_count: usize,
+}
+
+impl FocusStatus {
+    fn from_focus_day(focus_day: &FocusDay, now: DateTime<Local>) -> Self {
+        let today = now.date_naive();
+        let is_evening = now.hour() >= START_HOUR_FOR_EOD;
+
+        // Morning is done if sleep AND energy are filled
+        let morning_done = focus_day.date == today
+            && focus_day.stats.sleep.value().is_some()
+            && focus_day.stats.energy.value().is_some();
+
+        // Evening is done if all non-morning stats are filled
+        let evening_done = focus_day.date == today
+            && focus_day
+                .stats
+                .stats()
+                .iter()
+                .all(|s| match s {
+                    FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => true,
+                    _ => s.value().is_some(),
+                });
+
+        Self {
+            morning_done,
+            evening_done,
+            is_evening,
+            overdue_count: 0,
+            due_today_count: 0,
+        }
+    }
+
+    fn to_tmux_string(&self) -> String {
+        // Format: icon + optional task count
+        let focus_icon = if !self.morning_done {
+            "☀️"  // Morning pending
+        } else if self.is_evening && !self.evening_done {
+            "🌙" // Evening pending
+        } else {
+            "✓"  // All done
+        };
+
+        let task_part = match (self.overdue_count, self.due_today_count) {
+            (0, 0) => String::new(),
+            (o, 0) => format!(" 🔴{o}"),
+            (0, t) => format!(" 🟡{t}"),
+            (o, t) => format!(" 🔴{o}🟡{t}"),
+        };
+
+        format!("{focus_icon}{task_part}")
+    }
+
+    fn to_xbar_string(&self, config: &Config) -> String {
+        if !config.menubar.enabled {
+            return String::new();
+        }
+
+        let icon = if !self.morning_done {
+            "☀️"
+        } else if self.is_evening && !self.evening_done {
+            "🌙"
+        } else {
+            "✓"
+        };
+
+        let mut output = format!("{icon}\n---\n");
+
+        // Status section
+        if self.morning_done {
+            output.push_str("Morning: ✓ Done\n");
+        } else {
+            output.push_str("Morning: ⏳ Pending | shell=todo | param1=focus | terminal=true\n");
+        }
+
+        if self.is_evening {
+            if self.evening_done {
+                output.push_str("Evening: ✓ Done\n");
+            } else {
+                output.push_str(
+                    "Evening: ⏳ Pending | shell=todo | param1=focus | terminal=true\n",
+                );
+            }
+        }
+
+        output.push_str("---\n");
+
+        // Task counts
+        if self.overdue_count > 0 {
+            output.push_str(&format!("🔴 {} overdue\n", self.overdue_count));
+        }
+        if self.due_today_count > 0 {
+            output.push_str(&format!("🟡 {} due today\n", self.due_today_count));
+        }
+        if self.overdue_count == 0 && self.due_today_count == 0 {
+            output.push_str("✓ No urgent tasks\n");
+        }
+
+        output.push_str("---\n");
+        output.push_str("Run Focus | shell=todo | param1=focus | terminal=true\n");
+        output.push_str("Refresh | refresh=true\n");
+
+        output
+    }
+}
+
 fn expand_homedir(path: &Path) -> anyhow::Result<PathBuf> {
     Ok(path
         .to_string_lossy()
@@ -852,9 +1080,12 @@ async fn main() -> anyhow::Result<()> {
     let config_path = expand_homedir(&args.config_path)?;
 
     let mut cache = load_cache(&cache_path)?;
-    let _config = load_config(&config_path)?;
+    let config = load_config(&config_path)?;
 
-    if args.use_cache {
+    // Skip cache warnings for machine-readable commands
+    let is_machine_readable = matches!(args.command, Command::Status { .. });
+
+    if args.use_cache && !is_machine_readable {
         log::debug!("Using cache, ensuring that we've updated recently...");
         if let Some(last_updated) = cache.last_updated {
             log::debug!("Cache last updated at {last_updated}, checking if we should update...");
@@ -862,21 +1093,21 @@ async fn main() -> anyhow::Result<()> {
                 log::debug!("Cache is recent enough, we're good.");
             } else {
                 log::warn!("Cache is not recent enough, letting the user know...");
-                term.write_line(
-                    &style("Warning: cache has not been updated in more than 3 minutes, is the update command in the background? See the README.md")
+                eprintln!(
+                    "{}",
+                    style("Warning: cache has not been updated in more than 3 minutes, is the update command in the background? See the README.md")
                         .red()
-                        .to_string(),
-                )?;
+                );
             }
         } else {
             log::warn!("Cache has never been updated, letting the user know...");
-            term.write_line(
-                &style(
+            eprintln!(
+                "{}",
+                style(
                     "Warning: cache has never been updated, is caching working? See the README.md",
                 )
                 .red()
-                .to_string(),
-            )?;
+            );
         }
     }
 
@@ -1039,32 +1270,148 @@ async fn main() -> anyhow::Result<()> {
                     });
 
                 if missing_morning || missing_evening {
-                    let mut focus_summary = String::new();
-
-                    if missing_morning && missing_evening {
-                        focus_summary.push_str(
-                            &style("Don't forget your focus for the day!")
-                                .yellow()
-                                .to_string(),
-                        );
+                    let focus_message = if missing_morning && missing_evening {
+                        "Don't forget your focus for the day!"
                     } else if missing_morning {
-                        focus_summary.push_str(
-                            &style("Time for your morning reflection.")
-                                .yellow()
-                                .to_string(),
-                        );
-                    } else if missing_evening {
-                        focus_summary.push_str(
-                            &style("Time for your evening reflection.")
-                                .yellow()
-                                .to_string(),
-                        );
-                    }
+                        "Time for your morning reflection."
+                    } else {
+                        "Time for your evening reflection."
+                    };
 
-                    term.write_line(&format!(
-                        "{focus_summary} {}",
-                        style("(run `todo focus` to fill out focus data)").dim()
-                    ))?;
+                    if config.terminal.blocking {
+                        // Blocking mode: require user to acknowledge
+                        use dialoguer::{theme::ColorfulTheme, Select};
+
+                        println!();
+                        println!(
+                            "{}",
+                            style(format!("⚠️  {focus_message}")).yellow().bold()
+                        );
+                        println!();
+
+                        let options = &["Run focus now", "Skip for now"];
+                        let selection = Select::with_theme(&ColorfulTheme::default())
+                            .with_prompt("What would you like to do?")
+                            .items(options)
+                            .default(0)
+                            .interact()?;
+
+                        if selection == 0 {
+                            // User chose to run focus - we'll handle this by telling them to run the command
+                            // (We can't easily re-enter the Focus command flow from here)
+                            println!();
+                            println!(
+                                "{}",
+                                style("Great! Running `todo focus`...").green()
+                            );
+                            println!();
+
+                            // Execute focus flow inline
+                            let date = today;
+                            let force_eod = false;
+
+                            log::info!("Running focus from blocking prompt...");
+
+                            log::debug!("Calculating unfilled stats...");
+                            let focus_day_for_run = focus_day.clone();
+                            let unfilled_stats_at_this_time: Vec<&FocusDayStat> = focus_day_for_run
+                                .stats
+                                .stats()
+                                .into_iter()
+                                .filter(|s| match s {
+                                    FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => {
+                                        s.value().is_none()
+                                    }
+                                    _ => {
+                                        s.value().is_none()
+                                            && (force_eod
+                                                || date < today
+                                                || now.hour() >= START_HOUR_FOR_EOD)
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            let mut new_stats = focus_day_for_run.stats.clone();
+                            if unfilled_stats_at_this_time.is_empty() {
+                                println!(
+                                    "{}\n",
+                                    style("All caught up on stats!").bold().green()
+                                );
+                            } else {
+                                log::info!("Updating focus day stats...");
+                                println!(
+                                    "{}",
+                                    style("Time to fill out some stats!").bold().cyan()
+                                );
+                                for stat in unfilled_stats_at_this_time {
+                                    let mut new_stat = stat.clone();
+                                    let value =
+                                        Input::<u32>::with_theme(&ColorfulTheme::default())
+                                            .with_prompt(format!(
+                                                "{} {}",
+                                                stat.name(),
+                                                style("(0-9)").dim()
+                                            ))
+                                            .validate_with(|i: &u32| {
+                                                if *i > 9 {
+                                                    Err("value must be between 0 and 9"
+                                                        .to_string())
+                                                } else {
+                                                    Ok(())
+                                                }
+                                            })
+                                            .interact_text()?;
+                                    new_stat.set_value(Some(value));
+                                    new_stats.set_stat(new_stat);
+                                }
+                                println!();
+                            }
+
+                            // Sync the stats
+                            if new_stats != focus_day_for_run.stats {
+                                term.write_str(
+                                    &style("Syncing focus data...").dim().to_string(),
+                                )?;
+                                let url: Url = format!(
+                                    "https://app.asana.com/api/1.0/tasks/{task_gid}",
+                                    task_gid = focus_day_for_run.task.gid
+                                )
+                                .parse()
+                                .context("issue parsing focus day update request url")?;
+
+                                let custom_fields: HashMap<String, u32> = new_stats
+                                    .stats()
+                                    .into_iter()
+                                    .filter_map(|s| {
+                                        s.value()
+                                            .map(|v| (s.field_gid().to_string(), v))
+                                    })
+                                    .collect();
+
+                                client
+                                    .mutate_request(
+                                        Method::PUT,
+                                        &url,
+                                        DataWrapper {
+                                            data: UpdateFocusTaskCustomFieldsRequest {
+                                                notes: focus_day_for_run.diary.clone(),
+                                                custom_fields,
+                                            },
+                                        },
+                                    )
+                                    .await?;
+                                term.clear_line()?;
+                                println!("{}", style("Focus data synced!").green());
+                            }
+                        }
+                    } else {
+                        // Non-blocking mode: just show the message
+                        term.write_line(&format!(
+                            "{} {}",
+                            style(focus_message).yellow(),
+                            style("(run `todo focus` to fill out focus data)").dim()
+                        ))?;
+                    }
                 }
             }
         }
@@ -1358,6 +1705,340 @@ async fn main() -> anyhow::Result<()> {
             cache.focus_day = Some(focus_day);
             cache.last_updated = Some(Local::now());
             save_cache(&cache_path, &cache)?;
+        }
+
+        Command::Status { format } => {
+            log::info!("Generating status output...");
+
+            // Get focus day from cache or fetch
+            let focus_day = if let (Some(focus_day), true) = (&cache.focus_day, args.use_cache) {
+                focus_day.clone()
+            } else {
+                get_focus_day(today, &mut client).await?
+            };
+
+            let mut status = FocusStatus::from_focus_day(&focus_day, now);
+            status.overdue_count = overdue_tasks.len();
+            status.due_today_count = due_today_tasks.len();
+
+            match format {
+                StatusFormat::Tmux => {
+                    if config.tmux.enabled {
+                        print!("{}", status.to_tmux_string());
+                    }
+                }
+                StatusFormat::Json => {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&status).context("failed to serialize status")?
+                    );
+                }
+                StatusFormat::Xbar => {
+                    print!("{}", status.to_xbar_string(&config));
+                }
+            }
+        }
+
+        Command::Install { integration } => {
+            match integration {
+                InstallIntegration::Show => {
+                    println!("{}", style("Available integrations:").bold());
+                    println!();
+
+                    println!(
+                        "  {} - {}",
+                        style("tmux").cyan(),
+                        if config.tmux.enabled {
+                            style("enabled").green()
+                        } else {
+                            style("disabled").dim()
+                        }
+                    );
+                    println!("    Status bar integration showing focus state and task counts");
+                    println!("    Run: todo install tmux");
+                    println!();
+
+                    println!(
+                        "  {} - {}",
+                        style("xbar").cyan(),
+                        if config.menubar.enabled {
+                            style("enabled").green()
+                        } else {
+                            style("disabled").dim()
+                        }
+                    );
+                    println!("    macOS menu bar widget (requires xbar/SwiftBar)");
+                    println!("    Run: todo install xbar");
+                    println!();
+
+                    println!(
+                        "  {} - {}",
+                        style("notifications").cyan(),
+                        if config.notifications.enabled {
+                            style("enabled").green()
+                        } else {
+                            style("disabled").dim()
+                        }
+                    );
+                    println!(
+                        "    Scheduled notifications at {} and {}",
+                        config.notifications.morning_time, config.notifications.evening_time
+                    );
+                    println!("    Run: todo install notifications");
+                    println!();
+
+                    println!(
+                        "  {} - {}",
+                        style("terminal blocking").cyan(),
+                        if config.terminal.blocking {
+                            style("enabled").green()
+                        } else {
+                            style("disabled").dim()
+                        }
+                    );
+                    println!("    Block new terminal sessions until focus is acknowledged");
+                    println!(
+                        "    Set terminal.blocking = true in {}",
+                        args.config_path.display()
+                    );
+                }
+
+                InstallIntegration::Tmux => {
+                    println!("{}", style("tmux Integration").bold().cyan());
+                    println!();
+                    println!("Add this to your ~/.tmux.conf:");
+                    println!();
+                    println!(
+                        "{}",
+                        style(
+                            r#"# Todo focus status in status bar
+set -g status-right '#(todo status --use-cache --format tmux) | %H:%M'"#
+                        )
+                        .dim()
+                    );
+                    println!();
+                    println!("Then reload tmux config:");
+                    println!("{}", style("  tmux source-file ~/.tmux.conf").dim());
+                    println!();
+                    println!(
+                        "{}",
+                        style("Tip: The --use-cache flag is important to avoid API calls on every status refresh.")
+                            .yellow()
+                    );
+                }
+
+                InstallIntegration::Xbar => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let plugin_dir =
+                            expand_homedir(Path::new("~/Library/Application Support/xbar/plugins"))?;
+                        let plugin_path = plugin_dir.join(format!(
+                            "todo.{}s.sh",
+                            config.menubar.refresh_seconds
+                        ));
+
+                        if !plugin_dir.exists() {
+                            println!(
+                                "{}",
+                                style("xbar/SwiftBar not found. Install it from:").yellow()
+                            );
+                            println!("  https://xbarapp.com/ or https://swiftbar.app/");
+                            return Ok(());
+                        }
+
+                        let script = format!(
+                            r#"#!/bin/bash
+# Todo Focus Status for xbar/SwiftBar
+# Refresh every {} seconds
+
+todo status --use-cache --format xbar
+"#,
+                            config.menubar.refresh_seconds
+                        );
+
+                        fs::write(&plugin_path, script)?;
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            fs::set_permissions(&plugin_path, fs::Permissions::from_mode(0o755))?;
+                        }
+
+                        println!("{}", style("xbar plugin installed!").green().bold());
+                        println!("Plugin location: {}", plugin_path.display());
+                        println!();
+                        println!("Restart xbar/SwiftBar to load the plugin.");
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        println!(
+                            "{}",
+                            style("xbar/SwiftBar is only available on macOS.").yellow()
+                        );
+                    }
+                }
+
+                InstallIntegration::Notifications => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        println!("{}", style("macOS Notifications").bold().cyan());
+                        println!();
+                        println!(
+                            "This will create launchd agents for morning ({}) and evening ({}) reminders.",
+                            config.notifications.morning_time, config.notifications.evening_time
+                        );
+                        println!();
+
+                        let launch_agents_dir = expand_homedir(Path::new("~/Library/LaunchAgents"))?;
+                        fs::create_dir_all(&launch_agents_dir)?;
+
+                        // Parse times
+                        let morning_parts: Vec<&str> =
+                            config.notifications.morning_time.split(':').collect();
+                        let evening_parts: Vec<&str> =
+                            config.notifications.evening_time.split(':').collect();
+
+                        let morning_hour: u32 = morning_parts[0].parse().unwrap_or(9);
+                        let morning_minute: u32 = morning_parts.get(1).and_then(|m| m.parse().ok()).unwrap_or(0);
+                        let evening_hour: u32 = evening_parts[0].parse().unwrap_or(20);
+                        let evening_minute: u32 = evening_parts.get(1).and_then(|m| m.parse().ok()).unwrap_or(0);
+
+                        let todo_path = env::current_exe()?.display().to_string();
+
+                        // Morning plist
+                        let morning_plist = format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.todo.morning-reminder</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/osascript</string>
+        <string>-e</string>
+        <string>display notification "Time for your morning focus!" with title "Todo" sound name "default"</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>{morning_hour}</integer>
+        <key>Minute</key>
+        <integer>{morning_minute}</integer>
+    </dict>
+</dict>
+</plist>"#
+                        );
+
+                        // Evening plist
+                        let evening_plist = format!(
+                            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.todo.evening-reminder</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/osascript</string>
+        <string>-e</string>
+        <string>display notification "Time for your evening reflection!" with title "Todo" sound name "default"</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>{evening_hour}</integer>
+        <key>Minute</key>
+        <integer>{evening_minute}</integer>
+    </dict>
+</dict>
+</plist>"#
+                        );
+
+                        let morning_path = launch_agents_dir.join("com.todo.morning-reminder.plist");
+                        let evening_path = launch_agents_dir.join("com.todo.evening-reminder.plist");
+
+                        fs::write(&morning_path, morning_plist)?;
+                        fs::write(&evening_path, evening_plist)?;
+
+                        println!("{}", style("Notification agents installed!").green().bold());
+                        println!();
+                        println!("Load them with:");
+                        println!(
+                            "{}",
+                            style(format!(
+                                "  launchctl load {}",
+                                morning_path.display()
+                            ))
+                            .dim()
+                        );
+                        println!(
+                            "{}",
+                            style(format!(
+                                "  launchctl load {}",
+                                evening_path.display()
+                            ))
+                            .dim()
+                        );
+                        println!();
+                        println!(
+                            "To uninstall, use 'launchctl unload' and delete the plist files."
+                        );
+
+                        // Mention the _todo_path variable to silence the warning
+                        let _ = todo_path;
+                    }
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        println!("{}", style("Linux Notifications").bold().cyan());
+                        println!();
+                        println!("For Linux, you can use systemd user timers or cron.");
+                        println!();
+                        println!("Example crontab entries (run 'crontab -e' to edit):");
+                        println!();
+                        let morning_parts: Vec<&str> =
+                            config.notifications.morning_time.split(':').collect();
+                        let evening_parts: Vec<&str> =
+                            config.notifications.evening_time.split(':').collect();
+                        let morning_hour = morning_parts[0];
+                        let morning_minute = morning_parts.get(1).unwrap_or(&"0");
+                        let evening_hour = evening_parts[0];
+                        let evening_minute = evening_parts.get(1).unwrap_or(&"0");
+
+                        println!(
+                            "{}",
+                            style(format!(
+                                "{} {} * * * notify-send 'Todo' 'Time for your morning focus!'",
+                                morning_minute, morning_hour
+                            ))
+                            .dim()
+                        );
+                        println!(
+                            "{}",
+                            style(format!(
+                                "{} {} * * * notify-send 'Todo' 'Time for your evening reflection!'",
+                                evening_minute, evening_hour
+                            ))
+                            .dim()
+                        );
+                        println!();
+                        println!(
+                            "{}",
+                            style("Note: Requires 'libnotify' (notify-send) to be installed.")
+                                .yellow()
+                        );
+                    }
+
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                    {
+                        println!(
+                            "{}",
+                            style("Notifications not yet supported on this platform.").yellow()
+                        );
+                    }
+                }
+            }
         }
     }
 
