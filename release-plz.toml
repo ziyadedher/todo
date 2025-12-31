@@ -21,6 +21,3 @@ changelog_update = true
 
 # Tag format
 git_tag_name = "v{{ version }}"
-
-# Commit message for version bumps
-release_commits = "chore: release v{{ version }}"
