@@ -10,6 +10,7 @@
 //!
 //! ```no_run
 //! # use serde::{Deserialize, Serialize};
+//! # use chrono::{DateTime, Local, NaiveDate};
 //! # use todo::asana::{Client, DataRequest};
 //! # use todo::asana::execute_authorization_flow;
 //! #[derive(Debug, Deserialize, Serialize)]
@@ -46,7 +47,7 @@
 //! # async fn run() -> anyhow::Result<()> {
 //! let credentials = execute_authorization_flow().await?;
 //! let mut client = Client::new(credentials)?;
-//! let tasks: Vec<Task> = client.get::<Task>("user_task_list_gid".to_string()).await?;
+//! let tasks: Vec<Task> = client.get::<Task>(&"user_task_list_gid".to_string()).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -243,7 +244,8 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
 /// ```no_run
 /// # use todo::asana::refresh_authorization;
 /// # async fn run() -> anyhow::Result<()> {
-/// let credentials = refresh_authorization(&"refresh_token".to_string()).await?;
+/// let refresh_token = oauth2::RefreshToken::new("refresh_token".to_string());
+/// let credentials = refresh_authorization(&refresh_token).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -409,10 +411,10 @@ enum ClientError {
 /// # async fn run() -> anyhow::Result<()> {
 /// let credentials = execute_authorization_flow().await?;
 /// let mut client = Client::new(credentials)?;
-/// let tasks: Vec<Task> = client.get::<Task>("user_task_list_gid".to_string()).await?;
+/// let tasks: Vec<Task> = client.get::<Task>(&"user_task_list_gid".to_string()).await?;
 /// # Ok(())
 /// # }
-/// ````
+/// ```
 #[derive(Clone)]
 pub struct Client {
     base_url: Url,
@@ -461,6 +463,7 @@ impl Client {
     /// ```no_run
     /// # use todo::asana::Client;
     /// # use todo::asana::execute_authorization_flow;
+    /// # use serde::Serialize;
     /// # async fn run() -> anyhow::Result<()> {
     /// let credentials = execute_authorization_flow().await?;
     /// let mut client = Client::new(credentials)?;
@@ -470,7 +473,7 @@ impl Client {
     ///     name: String,
     /// }
     ///
-    /// let response = client.mutate_request(reqwest::Method::POST, &"https://app.asana.com/api/1.0/tasks".parse()?, &TaskCreation {
+    /// let response = client.mutate_request(reqwest::Method::POST, &"https://app.asana.com/api/1.0/tasks".parse()?, TaskCreation {
     ///     name: "test".to_string(),
     /// }).await?;
     /// # Ok(())
