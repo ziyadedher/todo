@@ -22,7 +22,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
       - name: Clippy
-        run: cargo clippy -- -D warnings -A clippy::multiple_crate_versions
+        run: cargo clippy -- -D warnings
 
   # Build artifacts on main branch pushes (for quick testing)
   build:

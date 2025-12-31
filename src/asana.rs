@@ -73,7 +73,7 @@ const OAUTH_LOCAL_REDIRECT_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 const APP_CLIENT_ID: &str = "1206215514588292";
 const APP_CLIENT_SECRET: &str = "8c7ea1c603de8462a3ba24f827ff1658";
 
-/// Type alias for a fully configured OAuth2 client with auth and token endpoints set.
+/// Type alias for a fully configured `OAuth2` client with auth and token endpoints set.
 type ConfiguredOAuthClient = oauth2::Client<
     oauth2::StandardErrorResponse<oauth2::basic::BasicErrorResponseType>,
     oauth2::StandardTokenResponse<oauth2::EmptyExtraTokenFields, oauth2::basic::BasicTokenType>,
@@ -106,11 +106,11 @@ fn setup_oauth_client() -> anyhow::Result<ConfiguredOAuthClient> {
 /// Comprehensive set of authorization credentials for the client.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Credentials {
-    /// OAuth2 authorization credentials for the client.
+    /// `OAuth2` authorization credentials for the client.
     OAuth2 {
-        /// OAuth2 access token, read more at <https://oauth.net/2/access-tokens/>
+        /// `OAuth2` access token, read more at <https://oauth.net/2/access-tokens/>
         access_token: String,
-        /// OAuth2 refresh token, read more at <https://oauth.net/2/refresh-tokens/>
+        /// `OAuth2` refresh token, read more at <https://oauth.net/2/refresh-tokens/>
         refresh_token: Option<String>,
     },
     /// Personal access token, read more at <https://developers.asana.com/docs/personal-access-token>
@@ -224,10 +224,8 @@ pub async fn execute_authorization_flow() -> anyhow::Result<Credentials> {
         .await
         .context("could not exchange authorization code for an access token")?;
     let credentials = Credentials::OAuth2 {
-        access_token: token.access_token().secret().to_string(),
-        refresh_token: token
-            .refresh_token()
-            .map(|token| token.secret().to_string()),
+        access_token: token.access_token().secret().clone(),
+        refresh_token: token.refresh_token().map(|token| token.secret().clone()),
     };
 
     Ok(credentials)
@@ -268,13 +266,13 @@ pub async fn refresh_authorization(
         .await
         .context("could not exchange refresh token for an access token")?;
     let credentials = Credentials::OAuth2 {
-        access_token: token.access_token().secret().to_string(),
+        access_token: token.access_token().secret().clone(),
         refresh_token: Some(
             token
                 .refresh_token()
                 .unwrap_or(refresh_token)
                 .secret()
-                .to_string(),
+                .clone(),
         ),
     };
 
@@ -419,13 +417,13 @@ enum ClientError {
 pub struct Client {
     base_url: Url,
     credentials: Credentials,
-    inner_client: reqwest::Client,
+    http: reqwest::Client,
 
     last_refresh_attempt: Option<DateTime<Local>>,
 }
 
 impl Client {
-    fn construct_inner_client() -> anyhow::Result<reqwest::Client> {
+    fn construct_http() -> anyhow::Result<reqwest::Client> {
         reqwest::ClientBuilder::new()
             .connect_timeout(Duration::seconds(5).to_std()?)
             .timeout(Duration::seconds(10).to_std()?)
@@ -444,7 +442,7 @@ impl Client {
     }
 
     async fn make_get_request(&self, url: &Url) -> anyhow::Result<reqwest::Response> {
-        self.inner_client
+        self.http
             .get(url.clone())
             .bearer_auth(self.get_authorization_token())
             .send()
@@ -485,7 +483,7 @@ impl Client {
         url: &Url,
         body: impl Serialize,
     ) -> anyhow::Result<reqwest::Response> {
-        self.inner_client
+        self.http
             .request(method, url.clone())
             .bearer_auth(self.get_authorization_token())
             .json(&body)
@@ -515,7 +513,7 @@ impl Client {
         log::debug!("Setting up Asana client...");
         Ok(Client {
             base_url: Url::parse(API_BASE_URL)?,
-            inner_client: Client::construct_inner_client()?,
+            http: Client::construct_http()?,
             credentials,
             last_refresh_attempt: None,
         })
@@ -565,7 +563,7 @@ impl Client {
                     );
                     execute_authorization_flow().await?
                 };
-                self.inner_client = Client::construct_inner_client()?;
+                self.http = Client::construct_http()?;
                 Ok(())
             }
 

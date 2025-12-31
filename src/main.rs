@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     env,
-    fmt::Display,
+    fmt::{Display, Write as _},
     fs,
     path::{Path, PathBuf},
 };
@@ -333,7 +333,8 @@ impl FocusDay {
     fn to_full_string(&self) -> String {
         let mut string = String::new();
 
-        string.push_str(&format!(
+        let _ = write!(
+            string,
             "🧠 {} {}",
             style(format!(
                 "Focus Day: {}",
@@ -341,16 +342,17 @@ impl FocusDay {
             ))
             .bold(),
             style(format!("({})", self.date.format("%Y-%m-%d"))).dim(),
-        ));
-        string.push_str(&format!(
+        );
+        let _ = write!(
+            string,
             "\n\n{}",
             if self.diary.is_empty() {
                 style("no diary entry — yet.").dim()
             } else {
                 style(self.diary.as_str())
             },
-        ));
-        string.push_str(&format!("\n\n{}\n", style("❤️ Statistics").bold().cyan()));
+        );
+        let _ = writeln!(string, "\n\n{}", style("❤️ Statistics").bold().cyan());
 
         for stat in self.stats.stats() {
             let line = format!(
@@ -358,14 +360,15 @@ impl FocusDay {
                 name = style(stat.name().to_string()).bold(),
                 value = style(stat.value().map_or("-".to_string(), |v| v.to_string()))
             );
-            string.push_str(&format!(
-                "   {}\n",
+            let _ = writeln!(
+                string,
+                "   {}",
                 if stat.value().is_some() {
                     style(line)
                 } else {
                     style(line).dim()
                 }
-            ));
+            );
         }
         string
     }
@@ -571,7 +574,7 @@ impl TryFrom<FocusTaskCustomField> for FocusDayStat {
             "1204172638540773" => Self::Health(custom_field.number_value),
             "1204172638540775" => Self::Satisfaction(custom_field.number_value),
             "1204172638540777" => Self::Stress(custom_field.number_value),
-            gid => anyhow::bail!("unknown focus day stat gid: {}", gid),
+            gid => anyhow::bail!("unknown focus day stat gid: {gid}"),
         })
     }
 }
@@ -675,7 +678,7 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
         .get::<Section>(&ASANA_FOCUS_PROJECT_GID.to_string())
         .await?;
     log::debug!("Got {} sections", sections.len());
-    log::trace!("Sections: {sections:#?}", sections = sections);
+    log::trace!("Sections: {sections:#?}");
 
     log::info!("Constructing focus weeks...");
     let focus_weeks = sections
@@ -684,21 +687,18 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
         .filter_map(|s| match s.try_into() {
             Ok(s) => Some(s),
             Err(err) => {
-                log::warn!("Could not parse focus section name: {}", err);
+                log::warn!("Could not parse focus section name: {err}");
                 None
             }
         })
         .collect::<Vec<FocusWeek>>();
     log::debug!("Constructed {} focus weeks", focus_weeks.len());
-    log::trace!("Focus weeks: {focus_weeks:#?}", focus_weeks = focus_weeks);
+    log::trace!("Focus weeks: {focus_weeks:#?}");
 
     log::info!("Finding current focus week...");
     let current_week =
         if let Some(current_week) = focus_weeks.iter().find(|w| w.from <= day && w.to >= day) {
-            log::debug!(
-                "Found current focus week: {current_week}",
-                current_week = current_week
-            );
+            log::debug!("Found current focus week: {current_week}");
             current_week.clone()
         } else {
             log::warn!("Could not find current focus week, so creating it...");
@@ -734,16 +734,10 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
                 .context("unable to parse focus week creation response")?
                 .data
                 .try_into()?;
-            log::debug!(
-                "Created current focus week: {current_week}",
-                current_week = current_week
-            );
+            log::debug!("Created current focus week: {current_week}");
             current_week
         };
-    log::debug!(
-        "Got current focus week: {current_week}",
-        current_week = current_week
-    );
+    log::debug!("Got current focus week: {current_week}");
 
     log::info!("Getting tasks in current focus week...");
     let tasks = client.get::<FocusTask>(&current_week.section.gid).await?;
@@ -756,20 +750,17 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
         .filter_map(|t| match t.try_into() {
             Ok(t) => Some(t),
             Err(err) => {
-                log::warn!("Could not parse focus task name: {}", err);
+                log::warn!("Could not parse focus task name: {err}");
                 None
             }
         })
         .collect::<Vec<FocusDay>>();
     log::debug!("Constructed {} focus days", focus_days.len());
-    log::trace!("Focus days: {focus_days:#?}", focus_days = focus_days);
+    log::trace!("Focus days: {focus_days:#?}");
 
     log::info!("Finding current focus day...");
     let current_day = if let Some(current_day) = focus_days.iter().find(|d| d.date == day) {
-        log::debug!(
-            "Found current focus day: {current_day}",
-            current_day = current_day
-        );
+        log::debug!("Found current focus day: {current_day}");
         current_day.clone()
     } else {
         log::warn!("Could not find current focus day, so creating it...");
@@ -802,10 +793,7 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
             .context("unable to parse focus day creation response")?
             .data
             .try_into()?;
-        log::debug!(
-            "Created current focus day: {current_day}",
-            current_day = current_day
-        );
+        log::debug!("Created current focus day: {current_day}");
 
         if let Some(previous_closest_day) = focus_days
             .iter()
@@ -835,10 +823,7 @@ async fn get_focus_day(day: NaiveDate, client: &mut Client) -> anyhow::Result<Fo
 
         current_day
     };
-    log::debug!(
-        "Got current focus day: {current_day}",
-        current_day = current_day
-    );
+    log::debug!("Got current focus day: {current_day}");
 
     Ok(current_day)
 }
@@ -872,10 +857,7 @@ async fn main() -> anyhow::Result<()> {
     if args.use_cache {
         log::debug!("Using cache, ensuring that we've updated recently...");
         if let Some(last_updated) = cache.last_updated {
-            log::debug!(
-                "Cache last updated at {last_updated}, checking if we should update...",
-                last_updated = last_updated
-            );
+            log::debug!("Cache last updated at {last_updated}, checking if we should update...");
             if Local::now() - last_updated < chrono::Duration::minutes(3) {
                 log::debug!("Cache is recent enough, we're good.");
             } else {
@@ -945,9 +927,7 @@ async fn main() -> anyhow::Result<()> {
         tasks
     } else {
         log::debug!("Getting tasks from Asana...");
-        let tasks = client
-            .get::<UserTask>(&user_task_list.gid.to_string())
-            .await?;
+        let tasks = client.get::<UserTask>(&user_task_list.gid.clone()).await?;
 
         log::debug!("Saving new tasks to cache...");
         cache.tasks = Some(tasks.clone());
@@ -1094,45 +1074,50 @@ async fn main() -> anyhow::Result<()> {
             let mut string = String::new();
 
             if !overdue_tasks.is_empty() {
-                string.push_str(&format!(
-                    "{} {}\n",
+                let _ = writeln!(
+                    string,
+                    "{} {}",
                     style(task_or_tasks(overdue_tasks.len())).red().bold(),
                     style("overdue:").bold()
-                ));
+                );
                 for task in overdue_tasks {
-                    string.push_str(&format!(
-                        "- ({}) {}\n",
+                    let _ = writeln!(
+                        string,
+                        "- ({}) {}",
                         style(task.due_on.unwrap().to_string()).red(),
                         task.name
-                    ));
+                    );
                 }
                 string.push('\n');
             }
 
             if !due_today_tasks.is_empty() {
-                string.push_str(&format!(
-                    "{} {}\n",
+                let _ = writeln!(
+                    string,
+                    "{} {}",
                     style(task_or_tasks(due_today_tasks.len())).yellow(),
                     style("due today:").bold()
-                ));
+                );
                 for task in due_today_tasks {
-                    string.push_str(&format!("- {}\n", task.name));
+                    let _ = writeln!(string, "- {}", task.name);
                 }
                 string.push('\n');
             }
 
             if !due_week_tasks.is_empty() {
-                string.push_str(&format!(
-                    "{} {}\n",
+                let _ = writeln!(
+                    string,
+                    "{} {}",
                     style(task_or_tasks(due_week_tasks.len())).blue(),
                     style("due within a week:").bold()
-                ));
+                );
                 for task in due_week_tasks {
-                    string.push_str(&format!(
-                        "- ({}) {}\n",
+                    let _ = writeln!(
+                        string,
+                        "- ({}) {}",
                         style(task.due_on.unwrap().to_string()).blue(),
                         task.name
-                    ));
+                    );
                 }
             }
 
@@ -1156,10 +1141,10 @@ async fn main() -> anyhow::Result<()> {
             log::info!("Managing focus...");
 
             let date = if let Some(date) = date {
-                log::info!("Using date from command line: {}", date);
+                log::info!("Using date from command line: {date}");
                 date
             } else {
-                log::info!("Using today's date: {}", today);
+                log::info!("Using today's date: {today}");
                 today
             };
 
@@ -1186,10 +1171,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                         })
                         .collect::<Vec<_>>();
-                    log::trace!(
-                        "Calculated unfilled stats: {unfilled_stats_at_this_time:#?}",
-                        unfilled_stats_at_this_time = unfilled_stats_at_this_time
-                    );
+                    log::trace!("Calculated unfilled stats: {unfilled_stats_at_this_time:#?}");
 
                     let mut new_stats = focus_day.stats.clone();
                     if unfilled_stats_at_this_time.is_empty() {
@@ -1213,10 +1195,7 @@ async fn main() -> anyhow::Result<()> {
                             new_stats.set_stat(new_stat);
                         }
                         println!();
-                        log::debug!(
-                            "Updated focus day stats: {new_stats:#?}",
-                            new_stats = new_stats
-                        );
+                        log::debug!("Updated focus day stats: {new_stats:#?}");
                     }
 
                     log::info!("Updating focus day diary...");
@@ -1226,10 +1205,7 @@ async fn main() -> anyhow::Result<()> {
                         .with_initial_text(focus_day.diary.clone())
                         .allow_empty(true)
                         .interact_text()?;
-                    log::debug!(
-                        "Updated focus day diary: {new_diary_entry}",
-                        new_diary_entry = new_diary_entry
-                    );
+                    log::debug!("Updated focus day diary: {new_diary_entry}");
                     println!();
 
                     let sync_task = tokio::spawn({
@@ -1375,9 +1351,7 @@ async fn main() -> anyhow::Result<()> {
 
         Command::Update => {
             log::info!("Updating cache...");
-            let tasks = client
-                .get::<UserTask>(&user_task_list.gid.to_string())
-                .await?;
+            let tasks = client.get::<UserTask>(&user_task_list.gid.clone()).await?;
             let focus_day = get_focus_day(Local::now().date_naive(), &mut client).await?;
 
             cache.tasks = Some(tasks.clone());
