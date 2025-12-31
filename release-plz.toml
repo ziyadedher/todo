@@ -1,0 +1,26 @@
+# release-plz configuration
+# https://release-plz.ieni.dev/docs/config
+
+[workspace]
+# Don't publish to crates.io (this is a binary, not a library)
+publish = false
+
+# Create GitHub releases when tagging
+git_release_enable = true
+
+# Use conventional commits to determine version bumps
+# feat: -> minor, fix: -> patch, breaking change -> major
+semver_check = false
+
+# PR settings
+pr_labels = ["release"]
+pr_draft = false
+
+# Changelog settings
+changelog_update = true
+
+# Tag format
+git_tag_name = "v{{ version }}"
+
+# Commit message for version bumps
+release_commits = "chore: release v{{ version }}"
