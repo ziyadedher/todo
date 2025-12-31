@@ -118,6 +118,13 @@ enum InstallIntegration {
     Show,
 }
 
+/// User choice when blocking terminal prompt is shown.
+#[derive(Clone, Copy)]
+enum BlockingChoice {
+    RunFocus,
+    Skip,
+}
+
 #[derive(Debug, Subcommand)]
 enum FocusCommand {
     /// Run the focus routine
@@ -135,24 +142,13 @@ struct Cache {
     last_updated: Option<DateTime<Local>>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 struct Config {
     tmux: TmuxConfig,
     menubar: MenubarConfig,
     notifications: NotificationsConfig,
     terminal: TerminalConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            tmux: TmuxConfig::default(),
-            menubar: MenubarConfig::default(),
-            notifications: NotificationsConfig::default(),
-            terminal: TerminalConfig::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -201,16 +197,10 @@ impl Default for NotificationsConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 struct TerminalConfig {
     blocking: bool,
-}
-
-impl Default for TerminalConfig {
-    fn default() -> Self {
-        Self { blocking: false }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -705,7 +695,7 @@ impl Display for FocusDayStat {
 struct FocusStatus {
     /// Whether morning reflection (sleep/energy) is complete
     morning_done: bool,
-    /// Whether evening reflection is complete (only relevant after START_HOUR_FOR_EOD)
+    /// Whether evening reflection is complete (only relevant after `START_HOUR_FOR_EOD`)
     evening_done: bool,
     /// Whether it's currently evening time
     is_evening: bool,
@@ -716,7 +706,12 @@ struct FocusStatus {
 }
 
 impl FocusStatus {
-    fn from_focus_day(focus_day: &FocusDay, now: DateTime<Local>) -> Self {
+    fn new(
+        focus_day: &FocusDay,
+        now: DateTime<Local>,
+        overdue_count: usize,
+        due_today_count: usize,
+    ) -> Self {
         let today = now.date_naive();
         let is_evening = now.hour() >= START_HOUR_FOR_EOD;
 
@@ -727,32 +722,28 @@ impl FocusStatus {
 
         // Evening is done if all non-morning stats are filled
         let evening_done = focus_day.date == today
-            && focus_day
-                .stats
-                .stats()
-                .iter()
-                .all(|s| match s {
-                    FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => true,
-                    _ => s.value().is_some(),
-                });
+            && focus_day.stats.stats().iter().all(|s| match s {
+                FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => true,
+                _ => s.value().is_some(),
+            });
 
         Self {
             morning_done,
             evening_done,
             is_evening,
-            overdue_count: 0,
-            due_today_count: 0,
+            overdue_count,
+            due_today_count,
         }
     }
 
     fn to_tmux_string(&self) -> String {
         // Format: icon + optional task count
         let focus_icon = if !self.morning_done {
-            "☀️"  // Morning pending
+            "☀️" // Morning pending
         } else if self.is_evening && !self.evening_done {
             "🌙" // Evening pending
         } else {
-            "✓"  // All done
+            "✓" // All done
         };
 
         let task_part = match (self.overdue_count, self.due_today_count) {
@@ -778,7 +769,8 @@ impl FocusStatus {
             "✓"
         };
 
-        let mut output = format!("{icon}\n---\n");
+        let mut output = String::new();
+        let _ = writeln!(output, "{icon}\n---");
 
         // Status section
         if self.morning_done {
@@ -791,23 +783,26 @@ impl FocusStatus {
             if self.evening_done {
                 output.push_str("Evening: ✓ Done\n");
             } else {
-                output.push_str(
-                    "Evening: ⏳ Pending | shell=todo | param1=focus | terminal=true\n",
-                );
+                output
+                    .push_str("Evening: ⏳ Pending | shell=todo | param1=focus | terminal=true\n");
             }
         }
 
         output.push_str("---\n");
 
         // Task counts
-        if self.overdue_count > 0 {
-            output.push_str(&format!("🔴 {} overdue\n", self.overdue_count));
-        }
-        if self.due_today_count > 0 {
-            output.push_str(&format!("🟡 {} due today\n", self.due_today_count));
-        }
-        if self.overdue_count == 0 && self.due_today_count == 0 {
-            output.push_str("✓ No urgent tasks\n");
+        match (self.overdue_count, self.due_today_count) {
+            (0, 0) => output.push_str("✓ No urgent tasks\n"),
+            (o, 0) => {
+                let _ = writeln!(output, "🔴 {o} overdue");
+            }
+            (0, t) => {
+                let _ = writeln!(output, "🟡 {t} due today");
+            }
+            (o, t) => {
+                let _ = writeln!(output, "🔴 {o} overdue");
+                let _ = writeln!(output, "🟡 {t} due today");
+            }
         }
 
         output.push_str("---\n");
@@ -816,6 +811,14 @@ impl FocusStatus {
 
         output
     }
+}
+
+/// Parse a time string like "09:00" or "9" into (hour, minute).
+fn parse_time_string(time: &str) -> (u32, u32) {
+    let parts: Vec<&str> = time.split(':').collect();
+    let hour = parts.first().and_then(|h| h.parse().ok()).unwrap_or(0);
+    let minute = parts.get(1).and_then(|m| m.parse().ok()).unwrap_or(0);
+    (hour, minute)
 }
 
 fn expand_homedir(path: &Path) -> anyhow::Result<PathBuf> {
@@ -1280,30 +1283,28 @@ async fn main() -> anyhow::Result<()> {
 
                     if config.terminal.blocking {
                         // Blocking mode: require user to acknowledge
-                        use dialoguer::{theme::ColorfulTheme, Select};
+                        use dialoguer::Select;
 
                         println!();
-                        println!(
-                            "{}",
-                            style(format!("⚠️  {focus_message}")).yellow().bold()
-                        );
+                        println!("{}", style(format!("⚠️  {focus_message}")).yellow().bold());
                         println!();
 
-                        let options = &["Run focus now", "Skip for now"];
+                        let choices = [
+                            (BlockingChoice::RunFocus, "Run focus now"),
+                            (BlockingChoice::Skip, "Skip for now"),
+                        ];
+
                         let selection = Select::with_theme(&ColorfulTheme::default())
                             .with_prompt("What would you like to do?")
-                            .items(options)
+                            .items(choices.map(|(_, s)| s))
                             .default(0)
                             .interact()?;
 
-                        if selection == 0 {
+                        if matches!(choices[selection].0, BlockingChoice::RunFocus) {
                             // User chose to run focus - we'll handle this by telling them to run the command
                             // (We can't easily re-enter the Focus command flow from here)
                             println!();
-                            println!(
-                                "{}",
-                                style("Great! Running `todo focus`...").green()
-                            );
+                            println!("{}", style("Great! Running `todo focus`...").green());
                             println!();
 
                             // Execute focus flow inline
@@ -1333,34 +1334,26 @@ async fn main() -> anyhow::Result<()> {
 
                             let mut new_stats = focus_day_for_run.stats.clone();
                             if unfilled_stats_at_this_time.is_empty() {
-                                println!(
-                                    "{}\n",
-                                    style("All caught up on stats!").bold().green()
-                                );
+                                println!("{}\n", style("All caught up on stats!").bold().green());
                             } else {
                                 log::info!("Updating focus day stats...");
-                                println!(
-                                    "{}",
-                                    style("Time to fill out some stats!").bold().cyan()
-                                );
+                                println!("{}", style("Time to fill out some stats!").bold().cyan());
                                 for stat in unfilled_stats_at_this_time {
                                     let mut new_stat = stat.clone();
-                                    let value =
-                                        Input::<u32>::with_theme(&ColorfulTheme::default())
-                                            .with_prompt(format!(
-                                                "{} {}",
-                                                stat.name(),
-                                                style("(0-9)").dim()
-                                            ))
-                                            .validate_with(|i: &u32| {
-                                                if *i > 9 {
-                                                    Err("value must be between 0 and 9"
-                                                        .to_string())
-                                                } else {
-                                                    Ok(())
-                                                }
-                                            })
-                                            .interact_text()?;
+                                    let value = Input::<u32>::with_theme(&ColorfulTheme::default())
+                                        .with_prompt(format!(
+                                            "{} {}",
+                                            stat.name(),
+                                            style("(0-9)").dim()
+                                        ))
+                                        .validate_with(|i: &u32| {
+                                            if *i > 9 {
+                                                Err("value must be between 0 and 9".to_string())
+                                            } else {
+                                                Ok(())
+                                            }
+                                        })
+                                        .interact_text()?;
                                     new_stat.set_value(Some(value));
                                     new_stats.set_stat(new_stat);
                                 }
@@ -1369,9 +1362,7 @@ async fn main() -> anyhow::Result<()> {
 
                             // Sync the stats
                             if new_stats != focus_day_for_run.stats {
-                                term.write_str(
-                                    &style("Syncing focus data...").dim().to_string(),
-                                )?;
+                                term.write_str(&style("Syncing focus data...").dim().to_string())?;
                                 let url: Url = format!(
                                     "https://app.asana.com/api/1.0/tasks/{task_gid}",
                                     task_gid = focus_day_for_run.task.gid
@@ -1383,8 +1374,7 @@ async fn main() -> anyhow::Result<()> {
                                     .stats()
                                     .into_iter()
                                     .filter_map(|s| {
-                                        s.value()
-                                            .map(|v| (s.field_gid().to_string(), v))
+                                        s.value().map(|v| (s.field_gid().to_string(), v))
                                     })
                                     .collect();
 
@@ -1717,9 +1707,8 @@ async fn main() -> anyhow::Result<()> {
                 get_focus_day(today, &mut client).await?
             };
 
-            let mut status = FocusStatus::from_focus_day(&focus_day, now);
-            status.overdue_count = overdue_tasks.len();
-            status.due_today_count = due_today_tasks.len();
+            let status =
+                FocusStatus::new(&focus_day, now, overdue_tasks.len(), due_today_tasks.len());
 
             match format {
                 StatusFormat::Tmux => {
@@ -1811,8 +1800,8 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "{}",
                         style(
-                            r#"# Todo focus status in status bar
-set -g status-right '#(todo status --use-cache --format tmux) | %H:%M'"#
+                            r"# Todo focus status in status bar
+set -g status-right '#(todo --use-cache status --format tmux) | %H:%M'"
                         )
                         .dim()
                     );
@@ -1822,7 +1811,7 @@ set -g status-right '#(todo status --use-cache --format tmux) | %H:%M'"#
                     println!();
                     println!(
                         "{}",
-                        style("Tip: The --use-cache flag is important to avoid API calls on every status refresh.")
+                        style("Tip: --use-cache is important to avoid API calls on every status refresh.")
                             .yellow()
                     );
                 }
@@ -1830,12 +1819,11 @@ set -g status-right '#(todo status --use-cache --format tmux) | %H:%M'"#
                 InstallIntegration::Xbar => {
                     #[cfg(target_os = "macos")]
                     {
-                        let plugin_dir =
-                            expand_homedir(Path::new("~/Library/Application Support/xbar/plugins"))?;
-                        let plugin_path = plugin_dir.join(format!(
-                            "todo.{}s.sh",
-                            config.menubar.refresh_seconds
-                        ));
+                        let plugin_dir = expand_homedir(Path::new(
+                            "~/Library/Application Support/xbar/plugins",
+                        ))?;
+                        let plugin_path =
+                            plugin_dir.join(format!("todo.{}s.sh", config.menubar.refresh_seconds));
 
                         if !plugin_dir.exists() {
                             println!(
@@ -1851,7 +1839,7 @@ set -g status-right '#(todo status --use-cache --format tmux) | %H:%M'"#
 # Todo Focus Status for xbar/SwiftBar
 # Refresh every {} seconds
 
-todo status --use-cache --format xbar
+todo --use-cache status --format xbar
 "#,
                             config.menubar.refresh_seconds
                         );
@@ -1889,21 +1877,14 @@ todo status --use-cache --format xbar
                         );
                         println!();
 
-                        let launch_agents_dir = expand_homedir(Path::new("~/Library/LaunchAgents"))?;
+                        let launch_agents_dir =
+                            expand_homedir(Path::new("~/Library/LaunchAgents"))?;
                         fs::create_dir_all(&launch_agents_dir)?;
 
-                        // Parse times
-                        let morning_parts: Vec<&str> =
-                            config.notifications.morning_time.split(':').collect();
-                        let evening_parts: Vec<&str> =
-                            config.notifications.evening_time.split(':').collect();
-
-                        let morning_hour: u32 = morning_parts[0].parse().unwrap_or(9);
-                        let morning_minute: u32 = morning_parts.get(1).and_then(|m| m.parse().ok()).unwrap_or(0);
-                        let evening_hour: u32 = evening_parts[0].parse().unwrap_or(20);
-                        let evening_minute: u32 = evening_parts.get(1).and_then(|m| m.parse().ok()).unwrap_or(0);
-
-                        let todo_path = env::current_exe()?.display().to_string();
+                        let (morning_hour, morning_minute) =
+                            parse_time_string(&config.notifications.morning_time);
+                        let (evening_hour, evening_minute) =
+                            parse_time_string(&config.notifications.evening_time);
 
                         // Morning plist
                         let morning_plist = format!(
@@ -1955,8 +1936,10 @@ todo status --use-cache --format xbar
 </plist>"#
                         );
 
-                        let morning_path = launch_agents_dir.join("com.todo.morning-reminder.plist");
-                        let evening_path = launch_agents_dir.join("com.todo.evening-reminder.plist");
+                        let morning_path =
+                            launch_agents_dir.join("com.todo.morning-reminder.plist");
+                        let evening_path =
+                            launch_agents_dir.join("com.todo.evening-reminder.plist");
 
                         fs::write(&morning_path, morning_plist)?;
                         fs::write(&evening_path, evening_plist)?;
@@ -1966,27 +1949,16 @@ todo status --use-cache --format xbar
                         println!("Load them with:");
                         println!(
                             "{}",
-                            style(format!(
-                                "  launchctl load {}",
-                                morning_path.display()
-                            ))
-                            .dim()
+                            style(format!("  launchctl load {}", morning_path.display())).dim()
                         );
                         println!(
                             "{}",
-                            style(format!(
-                                "  launchctl load {}",
-                                evening_path.display()
-                            ))
-                            .dim()
+                            style(format!("  launchctl load {}", evening_path.display())).dim()
                         );
                         println!();
                         println!(
                             "To uninstall, use 'launchctl unload' and delete the plist files."
                         );
-
-                        // Mention the _todo_path variable to silence the warning
-                        let _ = todo_path;
                     }
 
                     #[cfg(target_os = "linux")]
@@ -1997,28 +1969,23 @@ todo status --use-cache --format xbar
                         println!();
                         println!("Example crontab entries (run 'crontab -e' to edit):");
                         println!();
-                        let morning_parts: Vec<&str> =
-                            config.notifications.morning_time.split(':').collect();
-                        let evening_parts: Vec<&str> =
-                            config.notifications.evening_time.split(':').collect();
-                        let morning_hour = morning_parts[0];
-                        let morning_minute = morning_parts.get(1).unwrap_or(&"0");
-                        let evening_hour = evening_parts[0];
-                        let evening_minute = evening_parts.get(1).unwrap_or(&"0");
+
+                        let (morning_hour, morning_minute) =
+                            parse_time_string(&config.notifications.morning_time);
+                        let (evening_hour, evening_minute) =
+                            parse_time_string(&config.notifications.evening_time);
 
                         println!(
                             "{}",
                             style(format!(
-                                "{} {} * * * notify-send 'Todo' 'Time for your morning focus!'",
-                                morning_minute, morning_hour
+                                "{morning_minute} {morning_hour} * * * notify-send 'Todo' 'Time for your morning focus!'"
                             ))
                             .dim()
                         );
                         println!(
                             "{}",
                             style(format!(
-                                "{} {} * * * notify-send 'Todo' 'Time for your evening reflection!'",
-                                evening_minute, evening_hour
+                                "{evening_minute} {evening_hour} * * * notify-send 'Todo' 'Time for your evening reflection!'"
                             ))
                             .dim()
                         );
