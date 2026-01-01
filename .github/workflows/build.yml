@@ -1,0 +1,54 @@
+name: Build Binaries
+
+on:
+  workflow_call:
+    inputs:
+      upload-artifacts:
+        description: "Upload artifacts after build"
+        type: boolean
+        default: true
+      retention-days:
+        description: "Artifact retention days"
+        type: number
+        default: 7
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create archive
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../todo-${{ matrix.target }}.tar.gz todo
+
+      - name: Upload artifact
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: todo-${{ matrix.target }}
+          path: todo-${{ matrix.target }}.tar.gz
+          retention-days: ${{ inputs.retention-days }}
