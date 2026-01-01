@@ -1858,8 +1858,8 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                     println!(
                         "{}",
                         style(
-                            r#"   echo '#!/bin/bash
-todo --use-cache status --format tmux' > ~/.tmux/plugins/tmux/scripts/todo.sh"#
+                            r"   echo '#!/bin/bash
+todo --use-cache status --format tmux' > ~/.tmux/plugins/tmux/scripts/todo.sh"
                         )
                         .dim()
                     );
