@@ -2033,30 +2033,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
-name = "todo"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "console",
- "dialoguer",
- "env_logger",
- "futures",
- "human-panic",
- "log",
- "oauth2",
- "open",
- "regex",
- "reqwest 0.13.1",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "toml",
-]
-
-[[package]]
 name = "tokio"
 version = "1.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2987,6 +2963,30 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "ziyad-todo"
+version = "1.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "console",
+ "dialoguer",
+ "env_logger",
+ "futures",
+ "human-panic",
+ "log",
+ "oauth2",
+ "open",
+ "regex",
+ "reqwest 0.13.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

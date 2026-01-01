@@ -2,8 +2,8 @@
 # https://release-plz.ieni.dev/docs/config
 
 [workspace]
-# Don't publish to crates.io (this is a binary, not a library)
-publish = false
+# Publish to crates.io
+publish = true
 
 # Create GitHub releases when tagging
 git_release_enable = true
