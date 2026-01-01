@@ -87,6 +87,10 @@ enum Command {
         /// Output format
         #[arg(long, default_value = "short")]
         format: StatusFormat,
+
+        /// Color mode
+        #[arg(long, default_value = "always")]
+        color: ColorMode,
     },
 
     /// Install shell/system integrations
@@ -104,6 +108,16 @@ enum StatusFormat {
     Json,
     /// xbar/SwiftBar format for macOS menu bar
     Xbar,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+enum ColorMode {
+    /// Always use ANSI colors
+    Always,
+    /// Never use colors
+    Never,
+    /// Use tmux color syntax (#[fg=red])
+    Tmux,
 }
 
 #[derive(Debug, Subcommand)]
@@ -738,36 +752,51 @@ impl FocusStatus {
         }
     }
 
-    fn to_short_string(&self) -> String {
+    fn to_short_string(&self, color_mode: &ColorMode) -> String {
+        // Color helper based on mode
+        let colorize = |text: &str, color: &str| -> String {
+            match color_mode {
+                ColorMode::Always => {
+                    let styled = match color {
+                        "red" => style(text).red(),
+                        "yellow" => style(text).yellow(),
+                        "green" => style(text).green(),
+                        _ => style(text),
+                    };
+                    styled.force_styling(true).to_string()
+                }
+                ColorMode::Never => text.to_string(),
+                ColorMode::Tmux => {
+                    let fg = match color {
+                        "red" => "red",
+                        "yellow" => "yellow",
+                        "green" => "green",
+                        _ => "default",
+                    };
+                    format!("#[fg={fg}]{text}#[fg=default]")
+                }
+            }
+        };
+
         let mut parts = Vec::new();
 
         // Focus status (yellow)
         if !self.morning_done {
-            parts.push(style("focus:am").yellow().force_styling(true).to_string());
+            parts.push(colorize("focus:am", "yellow"));
         } else if self.is_evening && !self.evening_done {
-            parts.push(style("focus:pm").yellow().force_styling(true).to_string());
+            parts.push(colorize("focus:pm", "yellow"));
         }
 
         // Task counts
         if self.overdue_count > 0 {
-            parts.push(
-                style(format!("!{}", self.overdue_count))
-                    .red()
-                    .force_styling(true)
-                    .to_string(),
-            );
+            parts.push(colorize(&format!("!{}", self.overdue_count), "red"));
         }
         if self.due_today_count > 0 {
-            parts.push(
-                style(format!("+{}", self.due_today_count))
-                    .yellow()
-                    .force_styling(true)
-                    .to_string(),
-            );
+            parts.push(colorize(&format!("+{}", self.due_today_count), "yellow"));
         }
 
         if parts.is_empty() {
-            style("✓").green().force_styling(true).to_string()
+            colorize("✓", "green")
         } else {
             parts.join(" ")
         }
@@ -1727,7 +1756,7 @@ async fn main() -> anyhow::Result<()> {
             refresh_cache(&mut cache, &cache_path, &mut client, &user_task_list.gid).await?;
         }
 
-        Command::Status { format } => {
+        Command::Status { format, color } => {
             log::info!("Generating status output...");
 
             // Get focus day from cache or fetch
@@ -1743,7 +1772,7 @@ async fn main() -> anyhow::Result<()> {
             match format {
                 StatusFormat::Short => {
                     if config.tmux.enabled {
-                        print!("{}", status.to_short_string());
+                        print!("{}", status.to_short_string(&color));
                     }
                 }
                 StatusFormat::Json => {
@@ -1866,7 +1895,7 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format short)%f'"
                     println!(
                         "{}",
                         style(
-                            r"set -g status-right '#(todo --use-cache status --format short) | %H:%M'"
+                            r"set -g status-right '#(todo --use-cache status --format short --color tmux) | %H:%M'"
                         )
                         .dim()
                     );
@@ -1882,7 +1911,7 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format short)%f'"
                         "{}",
                         style(
                             r"   echo '#!/bin/bash
-todo --use-cache status --format short' > ~/.tmux/plugins/tmux/scripts/todo.sh"
+todo --use-cache status --format short --color never' > ~/.tmux/plugins/tmux/scripts/todo.sh"
                         )
                         .dim()
                     );
