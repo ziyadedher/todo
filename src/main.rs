@@ -231,6 +231,10 @@ async fn main() -> anyhow::Result<()> {
     let focus_project_gid = if let Some(ref gid) = config.focus_project_gid {
         log::debug!("Using configured focus project GID: {gid}");
         Some(gid.clone())
+    } else if args.use_cache {
+        // When using cache, don't try to fetch projects from Asana
+        log::debug!("Using cache mode with no focus project configured, skipping focus features.");
+        None
     } else {
         log::info!("No focus project configured, fetching projects...");
         let all_projects = client.get::<Project>(&workspace_gid).await?;
