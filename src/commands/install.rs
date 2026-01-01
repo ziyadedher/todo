@@ -1,5 +1,7 @@
 //! Install command handler.
 
+#[cfg(target_os = "macos")]
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use console::style;
