@@ -880,6 +880,26 @@ fn save_cache(path: &Path, cache: &Cache) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Refresh cache with fresh data from Asana.
+async fn refresh_cache(
+    cache: &mut Cache,
+    cache_path: &Path,
+    client: &mut Client,
+    user_task_list_gid: &str,
+) -> anyhow::Result<()> {
+    log::info!("Refreshing cache...");
+    let tasks = client
+        .get::<UserTask>(&user_task_list_gid.to_string())
+        .await?;
+    let focus_day = get_focus_day(Local::now().date_naive(), client).await?;
+
+    cache.tasks = Some(tasks);
+    cache.focus_day = Some(focus_day);
+    cache.last_updated = Some(Local::now());
+    save_cache(cache_path, cache)?;
+    Ok(())
+}
+
 fn load_config(path: &Path) -> anyhow::Result<Config> {
     log::debug!(
         "Checking if configuration file exists at {}...",
@@ -1694,14 +1714,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Command::Update => {
-            log::info!("Updating cache...");
-            let tasks = client.get::<UserTask>(&user_task_list.gid.clone()).await?;
-            let focus_day = get_focus_day(Local::now().date_naive(), &mut client).await?;
-
-            cache.tasks = Some(tasks.clone());
-            cache.focus_day = Some(focus_day);
-            cache.last_updated = Some(Local::now());
-            save_cache(&cache_path, &cache)?;
+            refresh_cache(&mut cache, &cache_path, &mut client, &user_task_list.gid).await?;
         }
 
         Command::Status { format } => {
@@ -2079,6 +2092,10 @@ todo --use-cache status --format xbar
                 }
             }
         }
+    }
+
+    if !args.use_cache {
+        refresh_cache(&mut cache, &cache_path, &mut client, &user_task_list.gid).await?;
     }
 
     Ok(())
