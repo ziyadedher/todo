@@ -1836,7 +1836,7 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                     println!("{}", style("tmux Integration").bold().cyan());
                     println!();
                     println!("{}", style("Option 1: Standard tmux").bold());
-                    println!("Add this to your ~/.tmux.conf:");
+                    println!("Add to ~/.tmux.conf:");
                     println!(
                         "{}",
                         style(
@@ -1846,28 +1846,39 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                     );
                     println!();
                     println!("{}", style("Option 2: Dracula theme").bold());
-                    println!("Dracula uses its own status bar. Add a custom script:");
                     println!();
-                    println!("1. Create {}:", style("~/.tmux/plugins/todo.sh").cyan());
+                    println!("1. Create the script:");
+                    println!(
+                        "{}",
+                        style("   mkdir -p ~/.tmux/plugins/tmux/scripts").dim()
+                    );
                     println!(
                         "{}",
                         style(
-                            r#"#!/bin/bash
-todo --use-cache status --format tmux"#
+                            r#"   echo '#!/bin/bash
+todo --use-cache status --format tmux' > ~/.tmux/plugins/tmux/scripts/todo.sh"#
                         )
                         .dim()
                     );
-                    println!();
-                    println!("2. Make it executable:");
-                    println!("{}", style("   chmod +x ~/.tmux/plugins/todo.sh").dim());
-                    println!();
-                    println!("3. Add to your tmux.conf before 'run tpm':");
                     println!(
                         "{}",
-                        style(r##"set -g status-left "#(~/.tmux/plugins/todo.sh) ""##).dim()
+                        style("   chmod +x ~/.tmux/plugins/tmux/scripts/todo.sh").dim()
                     );
                     println!();
-                    println!("Then reload: {}", style("tmux source-file ~/.tmux.conf").dim());
+                    println!("2. Add to your @dracula-plugins in ~/.tmux.conf:");
+                    println!(
+                        "{}",
+                        style(r#"   set -g @dracula-plugins "custom:todo.sh git cpu-usage ...""#).dim()
+                    );
+                    println!();
+                    println!("3. Reload: {}", style("tmux source-file ~/.tmux.conf").dim());
+                    println!();
+                    println!("{}", style("Status format:").bold());
+                    println!("  focus:am = morning focus pending");
+                    println!("  focus:pm = evening focus pending");
+                    println!("  !N       = N overdue tasks");
+                    println!("  +N       = N due today");
+                    println!("  ✓        = all clear");
                 }
 
                 InstallIntegration::Xbar => {
