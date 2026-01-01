@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/ziyadedher/todo/compare/v1.1.2...v1.2.0) - 2026-01-01
+
+### Added
+
+- add zsh and improved tmux integration guides
+- add zsh and improved tmux integration guides
+
+### Other
+
+- add cargo-husky for pre-commit hooks
+- fix formatting
+
 ## [1.1.2](https://github.com/ziyadedher/todo/compare/v1.1.1...v1.1.2) - 2026-01-01
 
 ### Other
