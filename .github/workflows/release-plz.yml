@@ -115,8 +115,9 @@ jobs:
                   TAG=$(echo '${{ needs.release-plz-release.outputs.releases }}' | jq -r '.[0].tag')
                   echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-            - name: Attach assets to release
-              uses: softprops/action-gh-release@v2
-              with:
-                  tag_name: ${{ steps.tag.outputs.tag }}
-                  files: artifacts/**/*.tar.gz
+            - name: Upload assets to release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  gh release upload ${{ steps.tag.outputs.tag }} artifacts/*/*.tar.gz --clobber
