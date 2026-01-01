@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1](https://github.com/ziyadedher/todo/compare/v1.4.0...v1.4.1) - 2026-01-01
+
+### Fixed
+
+- conditionally import std::fs for macOS only
+- use Some() instead of Ok() for Option return type
+
+### Other
+
+- modularize codebase into separate files
+
 ## [1.4.0](https://github.com/ziyadedher/todo/compare/v1.3.0...v1.4.0) - 2026-01-01
 
 ### Added
