@@ -50,6 +50,9 @@ enum Command {
     /// Print out a list of todo tasks ordered by due date
     List,
 
+    /// Mark a task as complete
+    Complete,
+
     /// Manage the Focus project
     Focus {
         /// The date to focus on
@@ -119,7 +122,8 @@ async fn refresh_cache(
         None
     };
 
-    cache.tasks = Some(tasks);
+    // Only cache tasks that have a due date
+    cache.tasks = Some(tasks.into_iter().filter(|t| t.due_on.is_some()).collect());
     cache.focus_day = focus_day;
     cache.last_updated = Some(Local::now());
     todo::cache::save(cache_path, cache)?;
@@ -294,7 +298,12 @@ async fn main() -> anyhow::Result<()> {
         tasks
     } else {
         log::debug!("Getting tasks from Asana...");
-        let tasks = client.get::<UserTask>(&user_task_list.gid.clone()).await?;
+        let tasks: Vec<_> = client
+            .get::<UserTask>(&user_task_list.gid.clone())
+            .await?
+            .into_iter()
+            .filter(|t| t.due_on.is_some())
+            .collect();
         log::debug!("Saving new tasks to cache...");
         cache.tasks = Some(tasks.clone());
         todo::cache::save(&cache_path, &cache)?;
@@ -323,6 +332,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::List => {
             todo::commands::list::run(&mut ctx, &grouped)?;
+        }
+        Command::Complete => {
+            todo::commands::complete::run(&mut ctx).await?;
         }
         Command::Focus {
             date,
