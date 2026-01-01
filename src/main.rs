@@ -85,7 +85,7 @@ enum Command {
     /// Output machine-readable status for integrations (tmux, menubar, etc.)
     Status {
         /// Output format
-        #[arg(long, default_value = "tmux")]
+        #[arg(long, default_value = "short")]
         format: StatusFormat,
     },
 
@@ -98,8 +98,8 @@ enum Command {
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 enum StatusFormat {
-    /// Short format for tmux status bar
-    Tmux,
+    /// Short one-line format for shell prompts and status bars
+    Short,
     /// JSON format for programmatic use
     Json,
     /// xbar/SwiftBar format for macOS menu bar
@@ -738,26 +738,36 @@ impl FocusStatus {
         }
     }
 
-    fn to_tmux_string(&self) -> String {
+    fn to_short_string(&self) -> String {
         let mut parts = Vec::new();
 
-        // Focus status
+        // Focus status (yellow)
         if !self.morning_done {
-            parts.push("focus:am".to_string());
+            parts.push(style("focus:am").yellow().force_styling(true).to_string());
         } else if self.is_evening && !self.evening_done {
-            parts.push("focus:pm".to_string());
+            parts.push(style("focus:pm").yellow().force_styling(true).to_string());
         }
 
         // Task counts
         if self.overdue_count > 0 {
-            parts.push(format!("!{}", self.overdue_count));
+            parts.push(
+                style(format!("!{}", self.overdue_count))
+                    .red()
+                    .force_styling(true)
+                    .to_string(),
+            );
         }
         if self.due_today_count > 0 {
-            parts.push(format!("+{}", self.due_today_count));
+            parts.push(
+                style(format!("+{}", self.due_today_count))
+                    .yellow()
+                    .force_styling(true)
+                    .to_string(),
+            );
         }
 
         if parts.is_empty() {
-            "✓".to_string()
+            style("✓").green().force_styling(true).to_string()
         } else {
             parts.join(" ")
         }
@@ -1731,9 +1741,9 @@ async fn main() -> anyhow::Result<()> {
                 FocusStatus::new(&focus_day, now, overdue_tasks.len(), due_today_tasks.len());
 
             match format {
-                StatusFormat::Tmux => {
+                StatusFormat::Short => {
                     if config.tmux.enabled {
-                        print!("{}", status.to_tmux_string());
+                        print!("{}", status.to_short_string());
                     }
                 }
                 StatusFormat::Json => {
@@ -1826,7 +1836,7 @@ async fn main() -> anyhow::Result<()> {
                         "{}",
                         style(
                             r"# Todo focus status in prompt
-export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
+export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format short)%f'"
                         )
                         .dim()
                     );
@@ -1856,7 +1866,7 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                     println!(
                         "{}",
                         style(
-                            r"set -g status-right '#(todo --use-cache status --format tmux) | %H:%M'"
+                            r"set -g status-right '#(todo --use-cache status --format short) | %H:%M'"
                         )
                         .dim()
                     );
@@ -1872,7 +1882,7 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                         "{}",
                         style(
                             r"   echo '#!/bin/bash
-todo --use-cache status --format tmux' > ~/.tmux/plugins/tmux/scripts/todo.sh"
+todo --use-cache status --format short' > ~/.tmux/plugins/tmux/scripts/todo.sh"
                         )
                         .dim()
                     );
