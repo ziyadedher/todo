@@ -190,7 +190,7 @@ todo --use-cache status --format short' > ~/.tmux/plugins/tmux/scripts/todo.sh"
         InstallIntegration::Xbar => {
             #[cfg(target_os = "macos")]
             {
-                if let Ok(plugin_dir) =
+                if let Some(plugin_dir) =
                     expand_homedir(Path::new("~/Library/Application Support/xbar/plugins"))
                 {
                     let plugin_path =
@@ -255,7 +255,8 @@ todo --use-cache status --format xbar
                 );
                 println!();
 
-                if let Ok(launch_agents_dir) = expand_homedir(Path::new("~/Library/LaunchAgents")) {
+                if let Some(launch_agents_dir) = expand_homedir(Path::new("~/Library/LaunchAgents"))
+                {
                     let _ = fs::create_dir_all(&launch_agents_dir);
 
                     let (morning_hour, morning_minute) =
