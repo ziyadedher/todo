@@ -1,0 +1,138 @@
+{
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/session-start.sh"
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "event": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/pre-commit-check.sh \"$CLAUDE_BASH_COMMAND\""
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "event": "Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-edit-format.sh $CLAUDE_FILE_PATH"
+                    }
+                ]
+            },
+            {
+                "event": "Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-edit-format.sh $CLAUDE_FILE_PATH"
+                    }
+                ]
+            },
+            {
+                "event": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-bash-notify.sh \"$CLAUDE_BASH_COMMAND\" $CLAUDE_BASH_EXIT_CODE"
+                    }
+                ]
+            }
+        ]
+    },
+    "permissions": {
+        "allow": [
+            "WebSearch",
+            "WebFetch(domain:docs.rs)",
+            "WebFetch(domain:github.com)",
+            "WebFetch(domain:developers.asana.com)",
+            "WebFetch(domain:release-plz.ieni.dev)",
+            "WebFetch(domain:release-plz.dev)",
+            "WebFetch(domain:crates.io)",
+            "WebFetch(domain:rust-lang.org)",
+            "WebFetch(domain:stackoverflow.com)",
+            "Bash(cat:*)",
+            "Bash(ls:*)",
+            "Bash(head:*)",
+            "Bash(tail:*)",
+            "Bash(wc:*)",
+            "Bash(grep:*)",
+            "Bash(find:*)",
+            "Bash(echo:*)",
+            "Bash(pwd:*)",
+            "Bash(which:*)",
+            "Bash(env:*)",
+            "Bash(date:*)",
+            "Bash(sort:*)",
+            "Bash(uniq:*)",
+            "Bash(diff:*)",
+            "Bash(dirname:*)",
+            "Bash(basename:*)",
+            "Bash(realpath:*)",
+            "Bash(tree:*)",
+            "Bash(file:*)",
+            "Bash(stat:*)",
+            "Bash(du:*)",
+            "Bash(df:*)",
+            "Bash(id:*)",
+            "Bash(whoami:*)",
+            "Bash(hostname:*)",
+            "Bash(uname:*)",
+            "Bash(printenv:*)",
+            "Bash(type:*)",
+            "Bash(command:*)",
+            "Bash(test:*)",
+            "Bash([:*)",
+            "Bash(tr:*)",
+            "Bash(cut:*)",
+            "Bash(awk:*)",
+            "Bash(sed:*)",
+            "Bash(less:*)",
+            "Bash(more:*)",
+            "Bash(rev:*)",
+            "Bash(tac:*)",
+            "Bash(nl:*)",
+            "Bash(od:*)",
+            "Bash(xxd:*)",
+            "Bash(hexdump:*)",
+            "Bash(md5sum:*)",
+            "Bash(sha256sum:*)",
+            "Bash(readlink:*)",
+            "Bash(cargo run:*)",
+            "Bash(cargo build:*)",
+            "Bash(cargo test:*)",
+            "Bash(cargo clippy:*)",
+            "Bash(cargo fmt:*)",
+            "Bash(cargo check:*)",
+            "Bash(cargo fix:*)",
+            "Bash(gh issue list:*)",
+            "Bash(gh issue view:*)",
+            "Bash(gh pr view:*)",
+            "Bash(gh pr diff:*)",
+            "Bash(gh pr list:*)",
+            "Bash(gh run view:*)",
+            "Bash(gh run list:*)",
+            "Bash(git status:*)",
+            "Bash(git log:*)",
+            "Bash(git diff:*)",
+            "Bash(git show:*)",
+            "Bash(git branch:*)",
+            "Bash(git remote:*)",
+            "Bash(git tag:*)",
+            "Bash(git rev-parse:*)",
+            "Bash(git ls-files:*)",
+            "Bash(git ls-tree:*)"
+        ]
+    }
+}
