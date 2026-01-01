@@ -5,14 +5,20 @@ on:
         branches:
             - main
 
+env:
+    CARGO_TERM_COLOR: always
+
 jobs:
-    # Release unpublished packages.
-    release-plz-release:
-        name: release-plz release
+    # Create a PR with the new versions, preparing the next release.
+    release-plz-pr:
+        name: release-plz PR
         runs-on: ubuntu-latest
         permissions:
             contents: write
-            id-token: write # Required for trusted publishing
+            pull-requests: write
+        concurrency:
+            group: release-plz-${{ github.ref }}
+            cancel-in-progress: false
         steps:
             - &checkout
               name: Checkout repository
@@ -26,26 +32,94 @@ jobs:
             - name: Run release-plz
               uses: release-plz/action@v0.5
               with:
-                  command: release
+                  command: release-pr
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # Create a PR with the new versions and changelog, preparing the next release.
-    release-plz-pr:
-        name: release-plz PR
+    # Release unpublished packages.
+    release-plz-release:
+        name: release-plz release
         runs-on: ubuntu-latest
         permissions:
             contents: write
-            pull-requests: write
-        concurrency:
-            group: release-plz-${{ github.ref }}
-            cancel-in-progress: false
+            id-token: write # Required for trusted publishing
+        outputs:
+            releases: ${{ steps.release.outputs.releases }}
         steps:
             - *checkout
             - *install-rust
             - name: Run release-plz
+              id: release
               uses: release-plz/action@v0.5
               with:
-                  command: release-pr
+                  command: release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # Build binaries for released versions
+    build-binaries:
+        name: Build (${{ matrix.target }})
+        needs: release-plz-release
+        if: ${{ needs.release-plz-release.outputs.releases != '[]' }}
+        runs-on: ${{ matrix.os }}
+        strategy:
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
+                      asset_name: todo-linux-x86_64
+                    - os: macos-latest
+                      target: x86_64-apple-darwin
+                      asset_name: todo-macos-x86_64
+                    - os: macos-latest
+                      target: aarch64-apple-darwin
+                      asset_name: todo-macos-aarch64
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: ${{ matrix.target }}
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  key: ${{ matrix.target }}
+
+            - name: Build
+              run: cargo build --release --target ${{ matrix.target }}
+
+            - name: Create archive
+              run: |
+                  cd target/${{ matrix.target }}/release
+                  tar -czvf ../../../${{ matrix.asset_name }}.tar.gz todo
+
+            - name: Upload artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ matrix.asset_name }}
+                  path: ${{ matrix.asset_name }}.tar.gz
+
+    # Attach binaries to the GitHub release
+    attach-assets:
+        name: Attach binaries to release
+        needs: [release-plz-release, build-binaries]
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: Download all artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: artifacts
+
+            - name: Get release tag
+              id: tag
+              run: |
+                  TAG=$(echo '${{ needs.release-plz-release.outputs.releases }}' | jq -r '.[0].tag')
+                  echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+            - name: Attach assets to release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.tag.outputs.tag }}
+                  files: artifacts/**/*.tar.gz
