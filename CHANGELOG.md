@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0](https://github.com/ziyadedher/todo/compare/v1.6.0...v1.7.0) - 2026-01-01
+
+### Added
+
+- add `todo complete` command to mark tasks as done
+
+### Fixed
+
+- update hooks to read JSON from stdin
+
+### Other
+
+- add unit tests for task grouping and date serde
+- add CI monitoring guidance and post-push hook reminder
+
 ## [1.6.0](https://github.com/ziyadedher/todo/compare/v1.5.0...v1.6.0) - 2026-01-01
 
 ### Added
