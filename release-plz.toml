@@ -17,7 +17,7 @@ pr_labels = ["release"]
 pr_draft = false
 
 # Changelog settings
-changelog_update = true
+changelog_update = false
 
 # Tag format
 git_tag_name = "v{{ version }}"
