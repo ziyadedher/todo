@@ -2967,7 +2967,7 @@ dependencies = [
 
 [[package]]
 name = "ziyad-todo"
-version = "1.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
