@@ -108,7 +108,9 @@ enum StatusFormat {
 
 #[derive(Debug, Subcommand)]
 enum InstallIntegration {
-    /// Print tmux configuration snippet
+    /// Print zsh prompt configuration
+    Zsh,
+    /// Print tmux configuration snippet (including Dracula theme)
     Tmux,
     /// Install xbar/SwiftBar plugin (macOS only)
     Xbar,
@@ -737,23 +739,28 @@ impl FocusStatus {
     }
 
     fn to_tmux_string(&self) -> String {
-        // Format: icon + optional task count
-        let focus_icon = if !self.morning_done {
-            "☀️" // Morning pending
+        let mut parts = Vec::new();
+
+        // Focus status
+        if !self.morning_done {
+            parts.push("focus:am".to_string());
         } else if self.is_evening && !self.evening_done {
-            "🌙" // Evening pending
+            parts.push("focus:pm".to_string());
+        }
+
+        // Task counts
+        if self.overdue_count > 0 {
+            parts.push(format!("!{}", self.overdue_count));
+        }
+        if self.due_today_count > 0 {
+            parts.push(format!("+{}", self.due_today_count));
+        }
+
+        if parts.is_empty() {
+            "✓".to_string()
         } else {
-            "✓" // All done
-        };
-
-        let task_part = match (self.overdue_count, self.due_today_count) {
-            (0, 0) => String::new(),
-            (o, 0) => format!(" 🔴{o}"),
-            (0, t) => format!(" 🟡{t}"),
-            (o, t) => format!(" 🔴{o}🟡{t}"),
-        };
-
-        format!("{focus_icon}{task_part}")
+            parts.join(" ")
+        }
     }
 
     fn to_xbar_string(&self, config: &Config) -> String {
@@ -1734,6 +1741,11 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", style("Available integrations:").bold());
                     println!();
 
+                    println!("  {}", style("zsh").cyan());
+                    println!("    Show focus status in your shell prompt");
+                    println!("    Run: todo install zsh");
+                    println!();
+
                     println!(
                         "  {} - {}",
                         style("tmux").cyan(),
@@ -1743,7 +1755,7 @@ async fn main() -> anyhow::Result<()> {
                             style("disabled").dim()
                         }
                     );
-                    println!("    Status bar integration showing focus state and task counts");
+                    println!("    Status bar integration (standard + Dracula theme)");
                     println!("    Run: todo install tmux");
                     println!();
 
@@ -1792,28 +1804,70 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
 
-                InstallIntegration::Tmux => {
-                    println!("{}", style("tmux Integration").bold().cyan());
+                InstallIntegration::Zsh => {
+                    println!("{}", style("Zsh Prompt Integration").bold().cyan());
                     println!();
-                    println!("Add this to your ~/.tmux.conf:");
+                    println!("Add this to your ~/.zshrc:");
                     println!();
                     println!(
                         "{}",
                         style(
-                            r"# Todo focus status in status bar
-set -g status-right '#(todo --use-cache status --format tmux) | %H:%M'"
+                            r"# Todo focus status in prompt
+export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                         )
                         .dim()
                     );
                     println!();
-                    println!("Then reload tmux config:");
-                    println!("{}", style("  tmux source-file ~/.tmux.conf").dim());
-                    println!();
+                    println!("Then add {} to your PROMPT, for example:", style("${TODO_PROMPT}").cyan());
                     println!(
                         "{}",
-                        style("Tip: --use-cache is important to avoid API calls on every status refresh.")
-                            .yellow()
+                        style(r#"export PROMPT="${TODO_PROMPT} ${PROMPT}""#).dim()
                     );
+                    println!();
+                    println!("{}", style("Status format:").bold());
+                    println!("  focus:am  = morning focus pending");
+                    println!("  focus:pm  = evening focus pending");
+                    println!("  !N        = N overdue tasks");
+                    println!("  +N        = N tasks due today");
+                    println!("  ✓         = all clear");
+                }
+
+                InstallIntegration::Tmux => {
+                    println!("{}", style("tmux Integration").bold().cyan());
+                    println!();
+                    println!("{}", style("Option 1: Standard tmux").bold());
+                    println!("Add this to your ~/.tmux.conf:");
+                    println!(
+                        "{}",
+                        style(
+                            r"set -g status-right '#(todo --use-cache status --format tmux) | %H:%M'"
+                        )
+                        .dim()
+                    );
+                    println!();
+                    println!("{}", style("Option 2: Dracula theme").bold());
+                    println!("Dracula uses its own status bar. Add a custom script:");
+                    println!();
+                    println!("1. Create {}:", style("~/.tmux/plugins/todo.sh").cyan());
+                    println!(
+                        "{}",
+                        style(
+                            r#"#!/bin/bash
+todo --use-cache status --format tmux"#
+                        )
+                        .dim()
+                    );
+                    println!();
+                    println!("2. Make it executable:");
+                    println!("{}", style("   chmod +x ~/.tmux/plugins/todo.sh").dim());
+                    println!();
+                    println!("3. Add to your tmux.conf before 'run tpm':");
+                    println!(
+                        "{}",
+                        style(r##"set -g status-left "#(~/.tmux/plugins/todo.sh) ""##).dim()
+                    );
+                    println!();
+                    println!("Then reload: {}", style("tmux source-file ~/.tmux.conf").dim());
                 }
 
                 InstallIntegration::Xbar => {
