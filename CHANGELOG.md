@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/ziyadedher/todo/compare/v1.2.0...v1.3.0) - 2026-01-01
+
+### Added
+
+- add colors to status output and rename format to 'short'
+- auto-refresh cache after non-cached commands
+
+### Fixed
+
+- add explicit pkg-fmt to binstall metadata
+
 ## [1.2.0](https://github.com/ziyadedher/todo/compare/v1.1.2...v1.2.0) - 2026-01-01
 
 ### Added
