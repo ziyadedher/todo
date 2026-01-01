@@ -1,11 +1,10 @@
 //! Summary command handler.
 
 use anyhow::Result;
-use chrono::Timelike;
 use console::style;
 
 use crate::context::{AppContext, GroupedTasks};
-use crate::focus::{FocusDayStat, START_HOUR_FOR_EOD};
+use crate::focus::is_evening;
 
 use super::get_focus_day;
 
@@ -73,38 +72,34 @@ pub async fn run(ctx: &mut AppContext, grouped: &GroupedTasks<'_>) -> Result<()>
         .dim()
     ))?;
 
-    // Check focus status
-    log::info!("Checking for focus...");
-    let focus_day = if let (Some(focus_day), true) = (&ctx.cache.focus_day, ctx.use_cache) {
-        focus_day.clone()
-    } else {
-        log::info!("No focus day in cache, fetching from Asana...");
-        get_focus_day(ctx.today, &mut ctx.client).await?
-    };
+    // Check focus status (only if focus project is configured)
+    if let Some(ref focus_project_gid) = ctx.config.focus_project_gid {
+        log::info!("Checking for focus...");
+        let focus_day = if let (Some(focus_day), true) = (&ctx.cache.focus_day, ctx.use_cache) {
+            focus_day.clone()
+        } else {
+            log::info!("No focus day in cache, fetching from Asana...");
+            get_focus_day(ctx.now.date_naive(), &mut ctx.client, focus_project_gid).await?
+        };
 
-    if focus_day.date == ctx.today {
-        let missing_morning =
-            focus_day.stats.sleep.value().is_none() || focus_day.stats.energy.value().is_none();
-        let missing_evening = ctx.now.hour() >= START_HOUR_FOR_EOD
-            && focus_day.stats.stats().iter().any(|s| match s {
-                FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => false,
-                _ => s.value().is_none(),
-            });
+        if focus_day.date == ctx.now.date_naive() {
+            let missing_morning = !focus_day.is_morning_done();
+            let missing_evening = is_evening(&ctx.now) && !focus_day.is_evening_done();
 
-        if missing_morning || missing_evening {
-            let focus_message = if missing_morning && missing_evening {
-                "Don't forget your focus for the day!"
-            } else if missing_morning {
-                "Time for your morning reflection."
-            } else {
-                "Time for your evening reflection."
+            let focus_message = match (missing_morning, missing_evening) {
+                (true, true) => Some("Don't forget your focus for the day!"),
+                (true, false) => Some("Time for your morning reflection."),
+                (false, true) => Some("Time for your evening reflection."),
+                (false, false) => None,
             };
 
-            ctx.term.write_line(&format!(
-                "{} {}",
-                style(focus_message).yellow(),
-                style("(run `todo focus` to fill out focus data)").dim()
-            ))?;
+            if let Some(message) = focus_message {
+                ctx.term.write_line(&format!(
+                    "{} {}",
+                    style(message).yellow(),
+                    style("(run `todo focus` to fill out focus data)").dim()
+                ))?;
+            }
         }
     }
 

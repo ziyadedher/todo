@@ -1,7 +1,5 @@
 //! Application context shared across commands.
 
-use std::path::PathBuf;
-
 use chrono::{DateTime, Days, Local, NaiveDate};
 use console::Term;
 
@@ -18,14 +16,10 @@ pub struct AppContext {
     pub config: Config,
     /// Asana API client.
     pub client: Client,
-    /// Path to the cache file.
-    pub cache_path: PathBuf,
     /// Terminal for output.
     pub term: Term,
     /// Current time.
     pub now: DateTime<Local>,
-    /// Today's date.
-    pub today: NaiveDate,
     /// Whether to use cached data.
     pub use_cache: bool,
 }
@@ -33,23 +27,14 @@ pub struct AppContext {
 impl AppContext {
     /// Create a new application context.
     #[must_use]
-    pub fn new(
-        cache: Cache,
-        config: Config,
-        client: Client,
-        cache_path: PathBuf,
-        use_cache: bool,
-    ) -> Self {
+    pub fn new(cache: Cache, config: Config, client: Client, use_cache: bool) -> Self {
         let now = Local::now();
-        let today = now.date_naive();
         Self {
             cache,
             config,
             client,
-            cache_path,
             term: Term::stdout(),
             now,
-            today,
             use_cache,
         }
     }

@@ -4,16 +4,12 @@ use std::collections::HashMap;
 use std::fmt::{Display, Write as _};
 
 use anyhow::Context as _;
-use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike as _};
 use console::style;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::asana::{Client, DataRequest};
-use crate::config::Config;
-
-/// Asana focus project GID.
-pub const ASANA_FOCUS_PROJECT_GID: &str = "1200179899177794";
 
 /// Regex pattern for focus week section names.
 pub const FOCUS_WEEK_PATTERN: &str =
@@ -240,6 +236,21 @@ pub struct FocusDay {
 }
 
 impl FocusDay {
+    /// Check if the morning routine is done for the given date.
+    #[must_use]
+    pub fn is_morning_done(&self) -> bool {
+        self.stats.sleep.value().is_some() && self.stats.energy.value().is_some()
+    }
+
+    /// Check if the evening routine is done for the given date.
+    #[must_use]
+    pub fn is_evening_done(&self) -> bool {
+        self.stats.stats().iter().all(|s| match s {
+            FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => true,
+            _ => s.value().is_some(),
+        })
+    }
+
     /// Render the focus day as a full string.
     #[must_use]
     pub fn to_full_string(&self) -> String {
@@ -541,150 +552,8 @@ impl Display for FocusDayStat {
     }
 }
 
-/// Represents the current focus status for integrations.
-#[derive(Clone, Debug, Serialize)]
-pub struct FocusStatus {
-    /// Whether morning reflection (sleep/energy) is complete.
-    pub morning_done: bool,
-    /// Whether evening reflection is complete.
-    pub evening_done: bool,
-    /// Whether it's currently evening time.
-    pub is_evening: bool,
-    /// Number of overdue tasks.
-    pub overdue_count: usize,
-    /// Number of tasks due today.
-    pub due_today_count: usize,
-}
-
-impl FocusStatus {
-    /// Create a new focus status from a focus day.
-    #[must_use]
-    pub fn new(
-        focus_day: &FocusDay,
-        now: DateTime<Local>,
-        overdue_count: usize,
-        due_today_count: usize,
-    ) -> Self {
-        let today = now.date_naive();
-        let is_evening = now.hour() >= START_HOUR_FOR_EOD;
-
-        let morning_done = focus_day.date == today
-            && focus_day.stats.sleep.value().is_some()
-            && focus_day.stats.energy.value().is_some();
-
-        let evening_done = focus_day.date == today
-            && focus_day.stats.stats().iter().all(|s| match s {
-                FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => true,
-                _ => s.value().is_some(),
-            });
-
-        Self {
-            morning_done,
-            evening_done,
-            is_evening,
-            overdue_count,
-            due_today_count,
-        }
-    }
-
-    /// Render as a short string for status bars.
-    #[must_use]
-    pub fn to_short_string(&self, force_styling: bool) -> String {
-        let mut parts = Vec::new();
-
-        if !self.morning_done {
-            parts.push(
-                style("focus:am")
-                    .yellow()
-                    .force_styling(force_styling)
-                    .to_string(),
-            );
-        } else if self.is_evening && !self.evening_done {
-            parts.push(
-                style("focus:pm")
-                    .yellow()
-                    .force_styling(force_styling)
-                    .to_string(),
-            );
-        }
-
-        if self.overdue_count > 0 {
-            parts.push(
-                style(format!("!{}", self.overdue_count))
-                    .red()
-                    .force_styling(force_styling)
-                    .to_string(),
-            );
-        }
-        if self.due_today_count > 0 {
-            parts.push(
-                style(format!("+{}", self.due_today_count))
-                    .yellow()
-                    .force_styling(force_styling)
-                    .to_string(),
-            );
-        }
-
-        if parts.is_empty() {
-            style("✓").green().force_styling(force_styling).to_string()
-        } else {
-            parts.join(" ")
-        }
-    }
-
-    /// Render as xbar format.
-    #[must_use]
-    pub fn to_xbar_string(&self, config: &Config) -> String {
-        if !config.menubar.enabled {
-            return String::new();
-        }
-
-        let icon = if !self.morning_done {
-            "☀️"
-        } else if self.is_evening && !self.evening_done {
-            "🌙"
-        } else {
-            "✓"
-        };
-
-        let mut output = String::new();
-        let _ = writeln!(output, "{icon}\n---");
-
-        if self.morning_done {
-            output.push_str("Morning: ✓ Done\n");
-        } else {
-            output.push_str("Morning: ⏳ Pending | shell=todo | param1=focus | terminal=true\n");
-        }
-
-        if self.is_evening {
-            if self.evening_done {
-                output.push_str("Evening: ✓ Done\n");
-            } else {
-                output
-                    .push_str("Evening: ⏳ Pending | shell=todo | param1=focus | terminal=true\n");
-            }
-        }
-
-        output.push_str("---\n");
-
-        match (self.overdue_count, self.due_today_count) {
-            (0, 0) => output.push_str("✓ No urgent tasks\n"),
-            (o, 0) => {
-                let _ = writeln!(output, "🔴 {o} overdue");
-            }
-            (0, t) => {
-                let _ = writeln!(output, "🟡 {t} due today");
-            }
-            (o, t) => {
-                let _ = writeln!(output, "🔴 {o} overdue");
-                let _ = writeln!(output, "🟡 {t} due today");
-            }
-        }
-
-        output.push_str("---\n");
-        output.push_str("Run Focus | shell=todo | param1=focus | terminal=true\n");
-        output.push_str("Refresh | refresh=true\n");
-
-        output
-    }
+/// Check if the current time is in the evening (after EOD start hour).
+#[must_use]
+pub fn is_evening(now: &DateTime<Local>) -> bool {
+    now.hour() >= START_HOUR_FOR_EOD
 }

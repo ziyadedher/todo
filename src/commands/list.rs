@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use console::style;
 
-use crate::context::GroupedTasks;
+use crate::context::{AppContext, GroupedTasks};
 
 fn task_or_tasks(num: usize) -> String {
     if num == 1 {
@@ -16,10 +16,14 @@ fn task_or_tasks(num: usize) -> String {
 
 /// Run the list command.
 ///
+/// # Errors
+///
+/// Returns an error if terminal I/O fails.
+///
 /// # Panics
 ///
 /// Panics if tasks are missing due dates (should not happen after filtering).
-pub fn run(grouped: &GroupedTasks) {
+pub fn run(ctx: &mut AppContext, grouped: &GroupedTasks) -> anyhow::Result<()> {
     log::info!("Producing a list of tasks...");
     let mut string = String::new();
 
@@ -72,8 +76,12 @@ pub fn run(grouped: &GroupedTasks) {
     }
 
     if string.is_empty() {
-        println!("{}", style("Nice! Everything done for now!").green().bold());
+        ctx.term.write_line(&format!(
+            "{}",
+            style("Nice! Everything done for now!").green().bold()
+        ))?;
     } else {
-        print!("{}", string.trim());
+        ctx.term.write_str(string.trim())?;
     }
+    Ok(())
 }

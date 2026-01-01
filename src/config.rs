@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
+    /// Asana workspace GID (will be auto-detected if not set).
+    pub workspace_gid: Option<String>,
+    /// Asana focus project GID (required for focus feature).
+    pub focus_project_gid: Option<String>,
     /// tmux integration settings.
     pub tmux: TmuxConfig,
     /// Menu bar integration settings.
@@ -51,6 +55,22 @@ pub fn load(path: &Path) -> anyhow::Result<Config> {
             .context("could not deserialize configuration file")?;
     log::trace!("Loaded configuration: {config:#?}");
     Ok(config)
+}
+
+/// Save configuration to disk.
+///
+/// # Errors
+///
+/// Returns an error if the config cannot be serialized or written.
+pub fn save(path: &Path, config: &Config) -> anyhow::Result<()> {
+    log::debug!("Saving configuration to {}...", path.display());
+    fs::write(
+        path,
+        toml::to_string_pretty(config).context("could not serialize configuration")?,
+    )
+    .context("could not write configuration file")?;
+    log::trace!("Saved configuration: {config:#?}");
+    Ok(())
 }
 
 /// tmux integration configuration.

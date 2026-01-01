@@ -12,8 +12,7 @@ use crate::context::AppContext;
 use crate::focus::{
     AddTaskToSectionRequest, CreateSectionRequest, CreateSectionTaskRequest,
     CreateSectionTaskRequestMembership, CreateSubtaskRequest, FocusDay, FocusDayStat, FocusTask,
-    FocusTaskSubtask, FocusWeek, Section, UpdateFocusTaskCustomFieldsRequest,
-    ASANA_FOCUS_PROJECT_GID, START_HOUR_FOR_EOD,
+    FocusTaskSubtask, FocusWeek, Section, UpdateFocusTaskCustomFieldsRequest, START_HOUR_FOR_EOD,
 };
 
 /// Get the focus day for a given date, creating it if necessary.
@@ -22,10 +21,14 @@ use crate::focus::{
 ///
 /// Returns an error if the Asana API requests fail.
 #[allow(clippy::too_many_lines)]
-pub async fn get_focus_day(day: NaiveDate, client: &mut Client) -> Result<FocusDay> {
+pub async fn get_focus_day(
+    day: NaiveDate,
+    client: &mut Client,
+    focus_project_gid: &str,
+) -> Result<FocusDay> {
     log::info!("Getting focus sections...");
     let sections = client
-        .get::<Section>(&ASANA_FOCUS_PROJECT_GID.to_string())
+        .get::<Section>(&focus_project_gid.to_string())
         .await?;
     log::debug!("Got {} sections", sections.len());
     log::trace!("Sections: {sections:#?}");
@@ -56,11 +59,9 @@ pub async fn get_focus_day(day: NaiveDate, client: &mut Client) -> Result<FocusD
             let current_week: FocusWeek = client
                 .mutate_request(
                     Method::POST,
-                    &format!(
-                        "https://app.asana.com/api/1.0/projects/{ASANA_FOCUS_PROJECT_GID}/sections"
-                    )
-                    .parse()
-                    .context("issue parsing focus week creation request url")?,
+                    &format!("https://app.asana.com/api/1.0/projects/{focus_project_gid}/sections")
+                        .parse()
+                        .context("issue parsing focus week creation request url")?,
                     DataWrapper {
                         data: CreateSectionRequest {
                             name: format!(
@@ -128,9 +129,9 @@ pub async fn get_focus_day(day: NaiveDate, client: &mut Client) -> Result<FocusD
                             day = day.weekday(),
                             date = day.format("%Y-%m-%d")
                         ),
-                        projects: vec![ASANA_FOCUS_PROJECT_GID.to_string()],
+                        projects: vec![focus_project_gid.to_string()],
                         memberships: vec![CreateSectionTaskRequestMembership {
-                            project: ASANA_FOCUS_PROJECT_GID.to_string(),
+                            project: focus_project_gid.to_string(),
                             section: current_week.section.gid.clone(),
                         }],
                     },
@@ -183,12 +184,21 @@ pub async fn get_focus_day(day: NaiveDate, client: &mut Client) -> Result<FocusD
 /// # Errors
 ///
 /// Returns an error if Asana API requests fail or terminal I/O fails.
+///
+/// # Panics
+///
+/// Panics if `focus_project_gid` is not set in context.
 pub async fn run_overview(ctx: &mut AppContext, date: Option<NaiveDate>) -> Result<()> {
-    let date = date.unwrap_or(ctx.today);
+    let date = date.unwrap_or(ctx.now.date_naive());
+    let focus_project_gid = ctx
+        .config
+        .focus_project_gid
+        .as_ref()
+        .expect("focus_project_gid should be set");
 
     ctx.term
         .write_str(&style("Loading focus day...").dim().to_string())?;
-    let focus_day = get_focus_day(date, &mut ctx.client).await?;
+    let focus_day = get_focus_day(date, &mut ctx.client, focus_project_gid).await?;
     ctx.term.clear_line()?;
 
     print!("{}", focus_day.to_full_string());
@@ -200,16 +210,26 @@ pub async fn run_overview(ctx: &mut AppContext, date: Option<NaiveDate>) -> Resu
 /// # Errors
 ///
 /// Returns an error if Asana API requests fail or terminal I/O fails.
+///
+/// # Panics
+///
+/// Panics if `focus_project_gid` is not set in context.
 #[allow(clippy::too_many_lines)]
 pub async fn run(ctx: &mut AppContext, date: Option<NaiveDate>, force_eod: bool) -> Result<()> {
     log::info!("Managing focus...");
 
-    let date = date.unwrap_or(ctx.today);
+    let date = date.unwrap_or(ctx.now.date_naive());
     log::info!("Using date: {date}");
+
+    let focus_project_gid = ctx
+        .config
+        .focus_project_gid
+        .as_ref()
+        .expect("focus_project_gid should be set");
 
     ctx.term
         .write_str(&style("Loading focus day...").dim().to_string())?;
-    let mut focus_day = get_focus_day(date, &mut ctx.client).await?;
+    let mut focus_day = get_focus_day(date, &mut ctx.client, focus_project_gid).await?;
     ctx.term.clear_line()?;
 
     // Run focus routine
@@ -224,7 +244,9 @@ pub async fn run(ctx: &mut AppContext, date: Option<NaiveDate>, force_eod: bool)
             FocusDayStat::Sleep(_) | FocusDayStat::Energy(_) => s.value().is_none(),
             _ => {
                 s.value().is_none()
-                    && (force_eod || date < ctx.today || ctx.now.hour() >= START_HOUR_FOR_EOD)
+                    && (force_eod
+                        || date < ctx.now.date_naive()
+                        || ctx.now.hour() >= START_HOUR_FOR_EOD)
             }
         })
         .collect::<Vec<_>>();
@@ -232,10 +254,16 @@ pub async fn run(ctx: &mut AppContext, date: Option<NaiveDate>, force_eod: bool)
 
     let mut new_stats = focus_day.stats.clone();
     if unfilled_stats_at_this_time.is_empty() {
-        println!("{}\n", style("All caught up on stats!").bold().green());
+        ctx.term.write_line(&format!(
+            "{}\n",
+            style("All caught up on stats!").bold().green()
+        ))?;
     } else {
         log::info!("Updating focus day stats...");
-        println!("{}", style("Time to fill out some stats!").bold().cyan());
+        ctx.term.write_line(&format!(
+            "{}",
+            style("Time to fill out some stats!").bold().cyan()
+        ))?;
         for stat in unfilled_stats_at_this_time {
             let mut new_stat = stat.clone();
             let value = Input::<u32>::with_theme(&ColorfulTheme::default())
@@ -251,19 +279,22 @@ pub async fn run(ctx: &mut AppContext, date: Option<NaiveDate>, force_eod: bool)
             new_stat.set_value(Some(value));
             new_stats.set_stat(new_stat);
         }
-        println!();
+        ctx.term.write_line("")?;
         log::debug!("Updated focus day stats: {new_stats:#?}");
     }
 
     log::info!("Updating focus day diary...");
-    println!("{}", style("Have anything to say?").bold().magenta());
+    ctx.term.write_line(&format!(
+        "{}",
+        style("Have anything to say?").bold().magenta()
+    ))?;
     let new_diary_entry = Input::<String>::with_theme(&ColorfulTheme::default())
         .with_prompt("diary")
         .with_initial_text(focus_day.diary.clone())
         .allow_empty(true)
         .interact_text()?;
     log::debug!("Updated focus day diary: {new_diary_entry}");
-    println!();
+    ctx.term.write_line("")?;
 
     let sync_task = tokio::spawn({
         let client = ctx.client.clone();
@@ -318,12 +349,13 @@ pub async fn run(ctx: &mut AppContext, date: Option<NaiveDate>, force_eod: bool)
     let mut subtasks = focus_day.subtasks.clone().unwrap_or_default();
 
     log::info!("Asking for tasks to add to focus day...");
-    println!("{}", style("Any tasks to do today?").bold().red());
+    ctx.term
+        .write_line(&format!("{}", style("Any tasks to do today?").bold().red()))?;
     let mut subtask_tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::new();
     let task_gid = focus_day.task.gid.clone();
     loop {
         for subtask in &subtasks {
-            println!("- {}", subtask.name);
+            ctx.term.write_line(&format!("- {}", subtask.name))?;
         }
 
         let subtask_name = Input::<String>::with_theme(&ColorfulTheme::default())
@@ -343,7 +375,7 @@ pub async fn run(ctx: &mut AppContext, date: Option<NaiveDate>, force_eod: bool)
         let subtask_task = tokio::spawn({
             let client = ctx.client.clone();
             let task_gid = task_gid.clone();
-            let today = ctx.today;
+            let today = ctx.now.date_naive();
             let url: Url = format!("https://app.asana.com/api/1.0/tasks/{task_gid}/subtasks")
                 .parse()
                 .context("issue parsing subtask creation request url")?;

@@ -39,7 +39,7 @@
 //!         &["this.gid", "this.created_at", "this.due_on", "this.name"]
 //!     }
 //!
-//!     fn params() -> Vec<(&'a str, String)> {
+//!     fn params(_request_data: &'a Self::RequestData) -> Vec<(&'a str, String)> {
 //!         vec![("completed_since", "now".to_string())]
 //!     }
 //! }
@@ -311,7 +311,7 @@ pub async fn refresh_authorization(
 ///         &["this.name"]
 ///     }
 ///
-///     fn params() -> Vec<(&'a str, String)> {
+///     fn params(_request_data: &'a Self::RequestData) -> Vec<(&'a str, String)> {
 ///         vec![("completed_since", "now".to_string())]
 ///     }
 /// }
@@ -340,7 +340,7 @@ pub trait DataRequest<'a> {
 
     /// Get any additional query parameters to use when making the request.
     #[must_use]
-    fn params() -> Vec<(&'a str, String)> {
+    fn params(_request_data: &'a Self::RequestData) -> Vec<(&'a str, String)> {
         vec![]
     }
 }
@@ -401,7 +401,7 @@ enum ClientError {
 ///         &["this.name"]
 ///     }
 ///
-///     fn params() -> Vec<(&'a str, String)> {
+///     fn params(_request_data: &'a Self::RequestData) -> Vec<(&'a str, String)> {
 ///         vec![("completed_since", "now".to_string())]
 ///     }
 /// }
@@ -590,7 +590,7 @@ impl Client {
         let mut url = self.base_url.join(&D::segments(request_data).join("/"))?;
 
         let fields = D::fields().join(",");
-        let query = &[D::params(), vec![("opt_fields", fields)]].concat();
+        let query = &[D::params(request_data), vec![("opt_fields", fields)]].concat();
         url.query_pairs_mut().extend_pairs(query).finish();
 
         log::debug!("Making a request to {url}...");

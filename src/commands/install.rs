@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use console::style;
 
-use crate::config::Config;
+use crate::context::AppContext;
 
 /// Install integration type.
 #[derive(Debug, Clone, clap::Subcommand)]
@@ -39,7 +39,7 @@ fn parse_time_string(time: &str) -> (u32, u32) {
 
 /// Run the install command.
 #[allow(clippy::too_many_lines)]
-pub fn run(config: &Config, config_path: &Path, integration: &InstallIntegration) {
+pub fn run(ctx: &mut AppContext, integration: &InstallIntegration) {
     match integration {
         InstallIntegration::Show => {
             println!("{}", style("Available integrations:").bold());
@@ -53,7 +53,7 @@ pub fn run(config: &Config, config_path: &Path, integration: &InstallIntegration
             println!(
                 "  {} - {}",
                 style("tmux").cyan(),
-                if config.tmux.enabled {
+                if ctx.config.tmux.enabled {
                     style("enabled").green()
                 } else {
                     style("disabled").dim()
@@ -66,7 +66,7 @@ pub fn run(config: &Config, config_path: &Path, integration: &InstallIntegration
             println!(
                 "  {} - {}",
                 style("xbar").cyan(),
-                if config.menubar.enabled {
+                if ctx.config.menubar.enabled {
                     style("enabled").green()
                 } else {
                     style("disabled").dim()
@@ -79,7 +79,7 @@ pub fn run(config: &Config, config_path: &Path, integration: &InstallIntegration
             println!(
                 "  {} - {}",
                 style("notifications").cyan(),
-                if config.notifications.enabled {
+                if ctx.config.notifications.enabled {
                     style("enabled").green()
                 } else {
                     style("disabled").dim()
@@ -87,7 +87,7 @@ pub fn run(config: &Config, config_path: &Path, integration: &InstallIntegration
             );
             println!(
                 "    Scheduled notifications at {} and {}",
-                config.notifications.morning_time, config.notifications.evening_time
+                ctx.config.notifications.morning_time, ctx.config.notifications.evening_time
             );
             println!("    Run: todo install notifications");
             println!();
@@ -95,17 +95,14 @@ pub fn run(config: &Config, config_path: &Path, integration: &InstallIntegration
             println!(
                 "  {} - {}",
                 style("terminal blocking").cyan(),
-                if config.terminal.blocking {
+                if ctx.config.terminal.blocking {
                     style("enabled").green()
                 } else {
                     style("disabled").dim()
                 }
             );
             println!("    Block new terminal sessions until focus is acknowledged");
-            println!(
-                "    Set terminal.blocking = true in {}",
-                config_path.display()
-            );
+            println!("    Set terminal.blocking = true in config");
         }
 
         InstallIntegration::Zsh => {
@@ -196,7 +193,7 @@ todo --use-cache status --format short' > ~/.tmux/plugins/tmux/scripts/todo.sh"
                     expand_homedir(Path::new("~/Library/Application Support/xbar/plugins"))
                 {
                     let plugin_path =
-                        plugin_dir.join(format!("todo.{}s.sh", config.menubar.refresh_seconds));
+                        plugin_dir.join(format!("todo.{}s.sh", ctx.config.menubar.refresh_seconds));
 
                     if !plugin_dir.exists() {
                         println!(
@@ -214,7 +211,7 @@ todo --use-cache status --format short' > ~/.tmux/plugins/tmux/scripts/todo.sh"
 
 todo --use-cache status --format xbar
 "#,
-                        config.menubar.refresh_seconds
+                        ctx.config.menubar.refresh_seconds
                     );
 
                     if fs::write(&plugin_path, script).is_ok() {
@@ -253,7 +250,7 @@ todo --use-cache status --format xbar
                 println!();
                 println!(
                     "This will create launchd agents for morning ({}) and evening ({}) reminders.",
-                    config.notifications.morning_time, config.notifications.evening_time
+                    ctx.config.notifications.morning_time, ctx.config.notifications.evening_time
                 );
                 println!();
 
@@ -262,9 +259,9 @@ todo --use-cache status --format xbar
                     let _ = fs::create_dir_all(&launch_agents_dir);
 
                     let (morning_hour, morning_minute) =
-                        parse_time_string(&config.notifications.morning_time);
+                        parse_time_string(&ctx.config.notifications.morning_time);
                     let (evening_hour, evening_minute) =
-                        parse_time_string(&config.notifications.evening_time);
+                        parse_time_string(&ctx.config.notifications.evening_time);
 
                     let morning_plist = format!(
                         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -346,9 +343,9 @@ todo --use-cache status --format xbar
                 println!();
 
                 let (morning_hour, morning_minute) =
-                    parse_time_string(&config.notifications.morning_time);
+                    parse_time_string(&ctx.config.notifications.morning_time);
                 let (evening_hour, evening_minute) =
-                    parse_time_string(&config.notifications.evening_time);
+                    parse_time_string(&ctx.config.notifications.evening_time);
 
                 println!(
                     "{}",

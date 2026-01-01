@@ -5,8 +5,61 @@ use serde::{Deserialize, Serialize};
 
 use crate::asana::DataRequest;
 
-/// Asana workspace GID.
-pub const ASANA_WORKSPACE_GID: &str = "1199118829113557";
+/// An Asana workspace.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Workspace {
+    /// Workspace GID.
+    pub gid: String,
+    /// Workspace name.
+    pub name: String,
+}
+
+impl DataRequest<'_> for Workspace {
+    type RequestData = ();
+    type ResponseData = Vec<Self>;
+
+    fn segments((): &Self::RequestData) -> Vec<String> {
+        vec!["workspaces".to_string()]
+    }
+
+    fn fields() -> &'static [&'static str] {
+        &["this.gid", "this.name"]
+    }
+}
+
+/// An Asana project.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Project {
+    /// Project GID.
+    pub gid: String,
+    /// Project name.
+    pub name: String,
+}
+
+impl<'a> DataRequest<'a> for Project {
+    type RequestData = String; // workspace GID
+    type ResponseData = Vec<Self>;
+
+    fn segments(workspace_gid: &'a Self::RequestData) -> Vec<String> {
+        vec![
+            "workspaces".to_string(),
+            workspace_gid.clone(),
+            "projects".to_string(),
+        ]
+    }
+
+    fn fields() -> &'a [&'a str] {
+        &["this.gid", "this.name"]
+    }
+
+    fn params(_workspace_gid: &'a Self::RequestData) -> Vec<(&'a str, String)> {
+        // Limit results and only get active projects
+        vec![
+            ("limit", "100".to_string()),
+            ("archived", "false".to_string()),
+        ]
+    }
+}
 
 /// A user's task from Asana.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -39,9 +92,17 @@ impl<'a> DataRequest<'a> for UserTask {
         &["this.gid", "this.created_at", "this.due_on", "this.name"]
     }
 
-    fn params() -> Vec<(&'a str, String)> {
+    fn params(_request_data: &'a Self::RequestData) -> Vec<(&'a str, String)> {
         vec![("completed_since", "now".to_string())]
     }
+}
+
+/// Request data for getting a user's task list.
+pub struct UserTaskListRequest {
+    /// User GID (or "me").
+    pub user_gid: String,
+    /// Workspace GID.
+    pub workspace_gid: String,
 }
 
 /// A user's task list reference.
@@ -52,13 +113,13 @@ pub struct UserTaskList {
 }
 
 impl<'a> DataRequest<'a> for UserTaskList {
-    type RequestData = String;
+    type RequestData = UserTaskListRequest;
     type ResponseData = Self;
 
-    fn segments(user_gid: &'a Self::RequestData) -> Vec<String> {
+    fn segments(request: &'a Self::RequestData) -> Vec<String> {
         vec![
             "users".to_string(),
-            user_gid.clone(),
+            request.user_gid.clone(),
             "user_task_list".to_string(),
         ]
     }
@@ -67,7 +128,7 @@ impl<'a> DataRequest<'a> for UserTaskList {
         &["this.gid"]
     }
 
-    fn params() -> Vec<(&'a str, String)> {
-        vec![("workspace", ASANA_WORKSPACE_GID.to_string())]
+    fn params(request: &'a Self::RequestData) -> Vec<(&'a str, String)> {
+        vec![("workspace", request.workspace_gid.clone())]
     }
 }
