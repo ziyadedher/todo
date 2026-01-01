@@ -7,6 +7,9 @@ if [[ ! "$BASH_CMD" =~ git\ (add\ .*\&\&\ )?commit ]]; then
     exit 0
 fi
 
+# Remind to check docs
+echo "📝 Reminder: Ensure README.md and CLAUDE.md are up-to-date with your changes."
+
 # Extract commit message from -m "..." or -m '...'
 COMMIT_MSG=$(echo "$BASH_CMD" | grep -oP '(-m\s+["\x27])?\K[^"\x27]+(?=["\x27](\s|$))' | head -1)
 

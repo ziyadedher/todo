@@ -53,6 +53,8 @@ This is a Rust CLI tool for Asana task management with OAuth2 authentication.
 
 **Pre-commit hooks:** cargo-husky runs `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check` on every commit. Ensure these pass before committing.
 
+**Before committing:** Always review `README.md` and `CLAUDE.md` to ensure they stay accurate and up-to-date with any changes made.
+
 **Testing commands:** The CLI requires Asana OAuth setup. For quick iteration:
 ```bash
 RUST_LOG=debug cargo run -- --use-cache summary
