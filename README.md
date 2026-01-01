@@ -4,8 +4,17 @@
 
 ## Command line interface
 
-Install the command line tool with `cargo install --path .` while in the `todo` codebase, then run
-`todo --help` for usage information.
+Install from crates.io:
+```sh
+cargo install ziyad-todo
+```
+
+Or use [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) for pre-built binaries:
+```sh
+cargo binstall ziyad-todo
+```
+
+Then run `todo --help` for usage information.
 
 ### Updating automatically in the background
 
@@ -20,4 +29,10 @@ If caching isn't working, you'll get a warning.
 
 ## Library
 
-Add the `todo` codebase to your `Cargo.toml` (you can point to local files) and then check out [src/lib.rs](src/lib.rs) for documentation. You can also build and read the documentation for the library by running `cargo doc --open` while in the `todo` codebase.
+Add to your `Cargo.toml`:
+```toml
+[dependencies]
+ziyad-todo = "1"
+```
+
+See [docs.rs/ziyad-todo](https://docs.rs/ziyad-todo) for documentation.
