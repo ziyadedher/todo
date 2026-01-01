@@ -1818,7 +1818,10 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format tmux)%f'"
                         .dim()
                     );
                     println!();
-                    println!("Then add {} to your PROMPT, for example:", style("${TODO_PROMPT}").cyan());
+                    println!(
+                        "Then add {} to your PROMPT, for example:",
+                        style("${TODO_PROMPT}").cyan()
+                    );
                     println!(
                         "{}",
                         style(r#"export PROMPT="${TODO_PROMPT} ${PROMPT}""#).dim()
@@ -1868,10 +1871,14 @@ todo --use-cache status --format tmux' > ~/.tmux/plugins/tmux/scripts/todo.sh"#
                     println!("2. Add to your @dracula-plugins in ~/.tmux.conf:");
                     println!(
                         "{}",
-                        style(r#"   set -g @dracula-plugins "custom:todo.sh git cpu-usage ...""#).dim()
+                        style(r#"   set -g @dracula-plugins "custom:todo.sh git cpu-usage ...""#)
+                            .dim()
                     );
                     println!();
-                    println!("3. Reload: {}", style("tmux source-file ~/.tmux.conf").dim());
+                    println!(
+                        "3. Reload: {}",
+                        style("tmux source-file ~/.tmux.conf").dim()
+                    );
                     println!();
                     println!("{}", style("Status format:").bold());
                     println!("  focus:am = morning focus pending");
