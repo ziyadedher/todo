@@ -11,3 +11,9 @@ if [[ "$COMMAND" =~ ^cargo\ (build|test|clippy) ]]; then
         echo "✗ $COMMAND failed (exit code: $EXIT_CODE)"
     fi
 fi
+
+# Remind to monitor CI after git push
+if [[ "$COMMAND" =~ git\ push ]] && [[ "$EXIT_CODE" == "0" ]]; then
+    echo ""
+    echo "🚀 Push successful! Monitor CI status with: gh run watch"
+fi

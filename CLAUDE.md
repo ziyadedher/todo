@@ -60,4 +60,10 @@ This is a Rust CLI tool for Asana task management with OAuth2 authentication.
 RUST_LOG=debug cargo run -- --use-cache summary
 ```
 
-**Cross-platform builds:** CI builds for x86_64-linux, x86_64-darwin, and aarch64-darwin. The `cargo-binstall` metadata in Cargo.toml enables binary installation.
+**Cross-platform builds:** CI builds for x86_64-linux, aarch64-linux (Termux/Android), x86_64-darwin, and aarch64-darwin. The `cargo-binstall` metadata in Cargo.toml enables binary installation.
+
+**After pushing:** Always monitor GitHub Actions to ensure CI passes. Check the run status with:
+```bash
+gh run list --limit 5
+gh run watch  # live monitor the latest run
+```
