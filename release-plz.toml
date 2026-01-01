@@ -5,8 +5,9 @@
 # Publish to crates.io
 publish = true
 
-# Create GitHub releases when tagging
+# Create GitHub releases when tagging (as draft, published after binaries attached)
 git_release_enable = true
+git_release_draft = true
 
 # Use conventional commits to determine version bumps
 # feat: -> minor, fix: -> patch, breaking change -> major

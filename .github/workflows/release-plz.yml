@@ -88,4 +88,11 @@ jobs:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                   GH_REPO: ${{ github.repository }}
               run: |
-                  gh release upload ${{ steps.tag.outputs.tag }} artifacts/*/*.tar.gz --clobber
+                  gh release upload ${{ steps.tag.outputs.tag }} artifacts/*/*.tar.gz
+
+            - name: Publish release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  gh release edit ${{ steps.tag.outputs.tag }} --draft=false
