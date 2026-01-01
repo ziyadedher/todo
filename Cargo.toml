@@ -16,6 +16,9 @@ path = "src/lib.rs"
 name = "todo"
 path = "src/main.rs"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/todo-{ target }.tar.gz"
+
 [dependencies]
 anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = ["serde"] }

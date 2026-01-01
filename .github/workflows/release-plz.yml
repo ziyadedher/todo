@@ -67,13 +67,10 @@ jobs:
                 include:
                     - os: ubuntu-latest
                       target: x86_64-unknown-linux-gnu
-                      asset_name: todo-linux-x86_64
                     - os: macos-latest
                       target: x86_64-apple-darwin
-                      asset_name: todo-macos-x86_64
                     - os: macos-latest
                       target: aarch64-apple-darwin
-                      asset_name: todo-macos-aarch64
         steps:
             - uses: actions/checkout@v4
 
@@ -91,13 +88,13 @@ jobs:
             - name: Create archive
               run: |
                   cd target/${{ matrix.target }}/release
-                  tar -czvf ../../../${{ matrix.asset_name }}.tar.gz todo
+                  tar -czvf ../../../todo-${{ matrix.target }}.tar.gz todo
 
             - name: Upload artifact
               uses: actions/upload-artifact@v4
               with:
-                  name: ${{ matrix.asset_name }}
-                  path: ${{ matrix.asset_name }}.tar.gz
+                  name: todo-${{ matrix.target }}
+                  path: todo-${{ matrix.target }}.tar.gz
 
     # Attach binaries to the GitHub release
     attach-assets:
