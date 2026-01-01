@@ -12,40 +12,40 @@
         ],
         "PreToolUse": [
             {
-                "event": "Bash",
+                "matcher": "Bash",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": ".claude/hooks/pre-commit-check.sh \"$CLAUDE_BASH_COMMAND\""
+                        "command": ".claude/hooks/pre-commit-check.sh"
                     }
                 ]
             }
         ],
         "PostToolUse": [
             {
-                "event": "Edit",
+                "matcher": "Edit",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": ".claude/hooks/post-edit-format.sh $CLAUDE_FILE_PATH"
+                        "command": ".claude/hooks/post-edit-format.sh"
                     }
                 ]
             },
             {
-                "event": "Write",
+                "matcher": "Write",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": ".claude/hooks/post-edit-format.sh $CLAUDE_FILE_PATH"
+                        "command": ".claude/hooks/post-edit-format.sh"
                     }
                 ]
             },
             {
-                "event": "Bash",
+                "matcher": "Bash",
                 "hooks": [
                     {
                         "type": "command",
-                        "command": ".claude/hooks/post-bash-notify.sh \"$CLAUDE_BASH_COMMAND\" $CLAUDE_BASH_EXIT_CODE"
+                        "command": ".claude/hooks/post-bash-notify.sh"
                     }
                 ]
             }

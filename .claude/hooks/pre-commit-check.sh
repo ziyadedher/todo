@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Validate semantic commit message format for git commit commands
-BASH_CMD="$1"
+
+# Read JSON input from stdin
+STDIN_DATA=$(cat)
+
+# Parse command from JSON using jq
+if ! command -v jq &>/dev/null; then
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"⚠️ Hook skipped: jq not installed (needed to parse hook input)"}}'
+    exit 0
+fi
+
+BASH_CMD=$(echo "$STDIN_DATA" | jq -r '.tool_input.command // empty')
 
 # Only check git commit commands with -m flag
 if [[ ! "$BASH_CMD" =~ git\ (add\ .*\&\&\ )?commit ]]; then
