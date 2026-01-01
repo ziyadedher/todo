@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/todo-{ target }.tar.gz"
+pkg-fmt = "tgz"
 
 [dependencies]
 anyhow = "1.0.100"
