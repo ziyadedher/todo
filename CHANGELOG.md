@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/ziyadedher/todo/compare/v1.5.0...v1.6.0) - 2026-01-01
+
+### Added
+
+- use draft releases for immutable release support
+- add ARM64 Linux build target for Termux/Android
+
+### Fixed
+
+- use correct ARM64 runner label (ubuntu-24.04-arm)
+- skip focus project lookup when using cache mode
+
+### Other
+
+- update README with crates.io installation instructions
+- fix README typos and add doc review reminder
+- add CLAUDE.md and Claude Code hooks
+
 ## [1.5.0](https://github.com/ziyadedher/todo/compare/v1.4.1...v1.5.0) - 2026-01-01
 
 ### Added
