@@ -677,3 +677,85 @@ pub mod serde_formats {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, TimeZone};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct TestDateTime {
+        #[serde(with = "serde_formats::datetime")]
+        timestamp: DateTime<Local>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct TestOptionalDate {
+        #[serde(with = "serde_formats::optional_date")]
+        date: Option<NaiveDate>,
+    }
+
+    #[test]
+    fn datetime_deserializes_asana_format() {
+        let json = r#"{"timestamp": "2024-06-15T14:30:00.000Z"}"#;
+        let parsed: TestDateTime = serde_json::from_str(json).unwrap();
+
+        // The parsed time should be 2024-06-15 14:30:00 UTC converted to local
+        let expected_utc = chrono::Utc
+            .with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+            .unwrap();
+        assert_eq!(parsed.timestamp.with_timezone(&chrono::Utc), expected_utc);
+    }
+
+    #[test]
+    fn datetime_serializes_to_asana_format() {
+        let utc_time = chrono::Utc
+            .with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+            .unwrap();
+        let local_time: DateTime<Local> = utc_time.into();
+        let test = TestDateTime {
+            timestamp: local_time,
+        };
+
+        let json = serde_json::to_string(&test).unwrap();
+        assert!(json.contains("2024-06-15T14:30:00.000000000Z"));
+    }
+
+    #[test]
+    fn optional_date_deserializes_present_date() {
+        let json = r#"{"date": "2024-06-15"}"#;
+        let parsed: TestOptionalDate = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            parsed.date,
+            Some(NaiveDate::from_ymd_opt(2024, 6, 15).unwrap())
+        );
+    }
+
+    #[test]
+    fn optional_date_deserializes_null() {
+        let json = r#"{"date": null}"#;
+        let parsed: TestOptionalDate = serde_json::from_str(json).unwrap();
+
+        assert_eq!(parsed.date, None);
+    }
+
+    #[test]
+    fn optional_date_serializes_present_date() {
+        let test = TestOptionalDate {
+            date: Some(NaiveDate::from_ymd_opt(2024, 6, 15).unwrap()),
+        };
+
+        let json = serde_json::to_string(&test).unwrap();
+        assert_eq!(json, r#"{"date":"2024-06-15"}"#);
+    }
+
+    #[test]
+    fn optional_date_serializes_none() {
+        let test = TestOptionalDate { date: None };
+
+        let json = serde_json::to_string(&test).unwrap();
+        assert_eq!(json, r#"{"date":null}"#);
+    }
+}

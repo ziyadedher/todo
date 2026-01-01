@@ -86,3 +86,160 @@ impl<'a> GroupedTasks<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn make_task(gid: &str, name: &str, due_on: Option<NaiveDate>) -> UserTask {
+        UserTask {
+            gid: gid.to_string(),
+            name: name.to_string(),
+            due_on,
+            created_at: Local::now(),
+        }
+    }
+
+    #[test]
+    fn groups_overdue_tasks() {
+        let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let tasks = vec![
+            make_task(
+                "1",
+                "Yesterday",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 14).unwrap()),
+            ),
+            make_task(
+                "2",
+                "Last week",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 8).unwrap()),
+            ),
+        ];
+
+        let grouped = GroupedTasks::from_tasks(&tasks, today);
+
+        assert_eq!(grouped.overdue.len(), 2);
+        assert!(grouped.due_today.is_empty());
+        assert!(grouped.due_this_week.is_empty());
+        // Should be sorted by due date (oldest first)
+        assert_eq!(grouped.overdue[0].name, "Last week");
+        assert_eq!(grouped.overdue[1].name, "Yesterday");
+    }
+
+    #[test]
+    fn groups_due_today_tasks() {
+        let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let tasks = vec![
+            make_task("1", "Today task", Some(today)),
+            make_task("2", "Another today", Some(today)),
+        ];
+
+        let grouped = GroupedTasks::from_tasks(&tasks, today);
+
+        assert!(grouped.overdue.is_empty());
+        assert_eq!(grouped.due_today.len(), 2);
+        assert!(grouped.due_this_week.is_empty());
+    }
+
+    #[test]
+    fn groups_due_this_week_tasks() {
+        let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let tasks = vec![
+            make_task(
+                "1",
+                "Tomorrow",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 16).unwrap()),
+            ),
+            make_task(
+                "2",
+                "In 5 days",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 20).unwrap()),
+            ),
+            make_task(
+                "3",
+                "In 7 days",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 22).unwrap()),
+            ),
+        ];
+
+        let grouped = GroupedTasks::from_tasks(&tasks, today);
+
+        assert!(grouped.overdue.is_empty());
+        assert!(grouped.due_today.is_empty());
+        assert_eq!(grouped.due_this_week.len(), 3);
+        // Should be sorted by due date
+        assert_eq!(grouped.due_this_week[0].name, "Tomorrow");
+        assert_eq!(grouped.due_this_week[1].name, "In 5 days");
+        assert_eq!(grouped.due_this_week[2].name, "In 7 days");
+    }
+
+    #[test]
+    fn excludes_tasks_beyond_week() {
+        let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let tasks = vec![
+            make_task(
+                "1",
+                "In 8 days",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 23).unwrap()),
+            ),
+            make_task(
+                "2",
+                "Next month",
+                Some(NaiveDate::from_ymd_opt(2024, 7, 15).unwrap()),
+            ),
+        ];
+
+        let grouped = GroupedTasks::from_tasks(&tasks, today);
+
+        assert!(grouped.overdue.is_empty());
+        assert!(grouped.due_today.is_empty());
+        assert!(grouped.due_this_week.is_empty());
+    }
+
+    #[test]
+    fn excludes_tasks_without_due_date() {
+        let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let tasks = vec![
+            make_task("1", "No due date", None),
+            make_task("2", "Has due date", Some(today)),
+        ];
+
+        let grouped = GroupedTasks::from_tasks(&tasks, today);
+
+        assert!(grouped.overdue.is_empty());
+        assert_eq!(grouped.due_today.len(), 1);
+        assert_eq!(grouped.due_today[0].name, "Has due date");
+        assert!(grouped.due_this_week.is_empty());
+    }
+
+    #[test]
+    fn handles_mixed_tasks() {
+        let today = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        let tasks = vec![
+            make_task(
+                "1",
+                "Overdue",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 10).unwrap()),
+            ),
+            make_task("2", "Today", Some(today)),
+            make_task(
+                "3",
+                "This week",
+                Some(NaiveDate::from_ymd_opt(2024, 6, 18).unwrap()),
+            ),
+            make_task("4", "No date", None),
+            make_task(
+                "5",
+                "Far future",
+                Some(NaiveDate::from_ymd_opt(2024, 12, 25).unwrap()),
+            ),
+        ];
+
+        let grouped = GroupedTasks::from_tasks(&tasks, today);
+
+        assert_eq!(grouped.overdue.len(), 1);
+        assert_eq!(grouped.due_today.len(), 1);
+        assert_eq!(grouped.due_this_week.len(), 1);
+    }
+}
