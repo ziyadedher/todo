@@ -133,7 +133,7 @@ export TODO_PROMPT='%F{magenta}$(todo --use-cache status --format short)%f'"
             println!("  focus:pm  = evening focus pending");
             println!("  !N        = N overdue tasks");
             println!("  +N        = N tasks due today");
-            println!("  ✓         = all clear");
+            println!("  ✔         = all clear");
         }
 
         InstallIntegration::Tmux => {
@@ -183,7 +183,7 @@ todo --use-cache status --format short' > ~/.tmux/plugins/tmux/scripts/todo.sh"
             println!("  focus:pm = evening focus pending");
             println!("  !N       = N overdue tasks");
             println!("  +N       = N due today");
-            println!("  ✓        = all clear");
+            println!("  ✔        = all clear");
         }
 
         InstallIntegration::Xbar => {

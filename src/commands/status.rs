@@ -98,7 +98,7 @@ impl Status {
         }
 
         if parts.is_empty() {
-            style("✓").green().force_styling(force_styling).to_string()
+            style("✔").green().force_styling(force_styling).to_string()
         } else {
             parts.join(" ")
         }
@@ -116,21 +116,21 @@ impl Status {
         } else if self.is_evening && !self.evening_done {
             "🌙"
         } else {
-            "✓"
+            "✔"
         };
 
         let mut output = String::new();
         let _ = writeln!(output, "{icon}\n---");
 
         if self.morning_done {
-            output.push_str("Morning: ✓ Done\n");
+            output.push_str("Morning: ✔ Done\n");
         } else {
             output.push_str("Morning: ⏳ Pending | shell=todo | param1=focus | terminal=true\n");
         }
 
         if self.is_evening {
             if self.evening_done {
-                output.push_str("Evening: ✓ Done\n");
+                output.push_str("Evening: ✔ Done\n");
             } else {
                 output
                     .push_str("Evening: ⏳ Pending | shell=todo | param1=focus | terminal=true\n");
@@ -140,7 +140,7 @@ impl Status {
         output.push_str("---\n");
 
         match (self.overdue_count, self.due_today_count) {
-            (0, 0) => output.push_str("✓ No urgent tasks\n"),
+            (0, 0) => output.push_str("✔ No urgent tasks\n"),
             (o, 0) => {
                 let _ = writeln!(output, "🔴 {o} overdue");
             }
