@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1](https://github.com/ziyadedher/todo/compare/v1.8.0...v1.8.1) - 2026-01-02
+
+### Other
+
+- use nicer checkmark character (✔ instead of ✓)
+
 ## [1.8.0](https://github.com/ziyadedher/todo/compare/v1.7.0...v1.8.0) - 2026-01-02
 
 ### Added
