@@ -33,7 +33,7 @@ This is a Rust CLI tool for Asana task management with OAuth2 authentication.
 **Key modules:**
 - `src/main.rs` - CLI entry point with clap-based argument parsing
 - `src/asana.rs` - Asana API client with OAuth2/PAT authentication
-- `src/commands/` - Subcommands (summary, list, focus, update, status, install)
+- `src/commands/` - Subcommands (summary, list, complete, add, focus, update, status, install)
 - `src/cache.rs` - JSON-based local cache for offline mode
 - `src/config.rs` - TOML configuration management
 - `src/focus.rs` - Daily focus tracking logic

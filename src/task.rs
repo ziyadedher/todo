@@ -132,3 +132,23 @@ impl<'a> DataRequest<'a> for UserTaskList {
         vec![("workspace", request.workspace_gid.clone())]
     }
 }
+
+/// Request body for creating a new task.
+#[derive(Clone, Debug, Serialize)]
+pub struct CreateTaskRequest {
+    /// Task name/title.
+    pub name: String,
+    /// Assignee (use "me" for current user).
+    pub assignee: String,
+    /// Workspace GID.
+    pub workspace: String,
+    /// Due date (optional).
+    #[serde(
+        with = "crate::asana::serde_formats::optional_date",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub due_on: Option<NaiveDate>,
+    /// Task notes/description (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}

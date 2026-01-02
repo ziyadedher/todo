@@ -1,5 +1,6 @@
 //! Command handlers for the CLI.
 
+pub mod add;
 pub mod complete;
 pub mod focus;
 pub mod install;

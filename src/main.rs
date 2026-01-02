@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{Local, NaiveDate};
+use chrono::Local;
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, Select};
 
@@ -16,6 +16,7 @@ use todo::{
     commands::status::StatusFormat,
     context::{AppContext, GroupedTasks},
     task::{Project, UserTask, UserTaskList, UserTaskListRequest, Workspace},
+    utils::parse_flexible_date,
 };
 
 /// Todo is a simple Asana helper script that pulls data from Asana and shows it in CLI settings
@@ -50,14 +51,28 @@ enum Command {
     /// Print out a list of todo tasks ordered by due date
     List,
 
-    /// Mark a task as complete
+    /// Interactively select and mark tasks as complete
     Complete,
+
+    /// Add a new task to your Asana task list
+    Add {
+        /// Task name (omit for interactive mode)
+        name: Option<String>,
+
+        /// Due date - supports dates (2026-01-15) or natural language (tomorrow, next friday, next week)
+        #[arg(long, short)]
+        due: Option<String>,
+
+        /// Task description/notes
+        #[arg(long, short = 'D')]
+        description: Option<String>,
+    },
 
     /// Manage the Focus project
     Focus {
-        /// The date to focus on
+        /// The date to focus on - supports dates (2026-01-15) or natural language (tomorrow, next friday, next week)
         #[arg(long)]
-        date: Option<NaiveDate>,
+        date: Option<String>,
 
         /// If set, forces the end of day to be considered to be starting
         #[arg(long, default_value = "false")]
@@ -336,6 +351,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Complete => {
             todo::commands::complete::run(&mut ctx).await?;
         }
+        Command::Add {
+            name,
+            due,
+            description,
+        } => {
+            todo::commands::add::run(&mut ctx, name, due, description).await?;
+        }
         Command::Focus {
             date,
             force_eod,
@@ -344,12 +366,13 @@ async fn main() -> anyhow::Result<()> {
             if ctx.config.focus_project_gid.is_none() {
                 anyhow::bail!("Focus project not configured. Set focus_project_gid in config.");
             }
+            let parsed_date = date.map(|d| parse_flexible_date(&d)).transpose()?;
             match command {
                 Some(FocusCommand::Overview) => {
-                    todo::commands::focus::run_overview(&mut ctx, date).await?;
+                    todo::commands::focus::run_overview(&mut ctx, parsed_date).await?;
                 }
                 Some(FocusCommand::Run) | None => {
-                    todo::commands::focus::run(&mut ctx, date, force_eod).await?;
+                    todo::commands::focus::run(&mut ctx, parsed_date, force_eod).await?;
                 }
             }
         }

@@ -116,6 +116,7 @@
             "Bash(cargo fmt:*)",
             "Bash(cargo check:*)",
             "Bash(cargo fix:*)",
+            "Bash(cargo doc:*)",
             "Bash(gh issue list:*)",
             "Bash(gh issue view:*)",
             "Bash(gh pr view:*)",

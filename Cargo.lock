@@ -1064,6 +1064,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libc"
 version = "0.2.178"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1259,6 +1265,18 @@ name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
+
+[[package]]
+name = "pidgin"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28a2a37d2d894d50891a12fba6dd7b84292caf2f14fd0086a2af2404be2d8ebb"
+dependencies = [
+ "lazy_static",
+ "regex",
+ "serde",
+ "serde_regex",
+]
 
 [[package]]
 name = "pin-project-lite"
@@ -1792,6 +1810,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_regex"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8136f1a4ea815d7eac4101cfd0b16dc0cb5e1fe1b8609dfd728058656b7badf"
+dependencies = [
+ "regex",
+ "serde",
+]
+
+[[package]]
 name = "serde_spanned"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2200,6 +2228,19 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "two_timer"
+version = "2.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e22270f53d0cc86e580617796a681e89d5d5c22fa3774d70ba1592915404ee"
+dependencies = [
+ "chrono",
+ "lazy_static",
+ "pidgin",
+ "regex",
+ "serde_json",
+]
 
 [[package]]
 name = "typenum"
@@ -2996,6 +3037,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "toml",
+ "two_timer",
 ]
 
 [[package]]
