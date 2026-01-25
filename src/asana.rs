@@ -418,6 +418,8 @@ pub struct Client {
     base_url: Url,
     credentials: Credentials,
     http: reqwest::Client,
+    /// If true, the client will not trigger interactive auth prompts.
+    no_auth: bool,
 
     last_refresh_attempt: Option<DateTime<Local>>,
 }
@@ -510,11 +512,26 @@ impl Client {
     /// # }
     /// ```
     pub fn new(credentials: Credentials) -> anyhow::Result<Client> {
-        log::debug!("Setting up Asana client...");
+        Self::new_with_options(credentials, false)
+    }
+
+    /// Create a new client with the given credentials and options.
+    ///
+    /// # Arguments
+    ///
+    /// * `credentials` - The credentials to use for authentication.
+    /// * `no_auth` - If true, the client will not trigger interactive auth prompts on token refresh.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the inner client could not be constructed.
+    pub fn new_with_options(credentials: Credentials, no_auth: bool) -> anyhow::Result<Client> {
+        log::debug!("Setting up Asana client (no_auth: {no_auth})...");
         Ok(Client {
             base_url: Url::parse(API_BASE_URL)?,
             http: Client::construct_http()?,
             credentials,
+            no_auth,
             last_refresh_attempt: None,
         })
     }
@@ -557,6 +574,14 @@ impl Client {
                         "Found a refresh token, attempting to refresh authorization directly..."
                     );
                     refresh_authorization(&oauth2::RefreshToken::new(refresh_token.clone())).await?
+                } else if self.no_auth {
+                    log::debug!(
+                        "Could not find a refresh token and no_auth is set, cannot refresh..."
+                    );
+                    return Err(ClientError::UnableToRefreshAccessToken(
+                        "no refresh token available and interactive auth is disabled".to_string(),
+                    )
+                    .into());
                 } else {
                     log::debug!(
                         "Could not find a refresh token, reinitiating the authorization flow..."

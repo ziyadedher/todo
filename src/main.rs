@@ -2,6 +2,7 @@
 
 use std::{
     env,
+    io::IsTerminal,
     path::{Path, PathBuf},
 };
 
@@ -38,6 +39,11 @@ struct Args {
     /// If set, uses the cache instead of pulling from Asana
     #[arg(long)]
     use_cache: bool,
+
+    /// If set, disables interactive authentication prompts (errors if auth is needed).
+    /// Defaults to true when not running in an interactive terminal.
+    #[arg(long)]
+    no_auth: Option<bool>,
 
     #[command(subcommand)]
     command: Command,
@@ -190,10 +196,32 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Determine if interactive auth is allowed
+    // Default to no_auth=true when stdin is not a terminal (non-interactive mode)
+    let is_interactive = std::io::stdin().is_terminal();
+    let no_auth = args.no_auth.unwrap_or(!is_interactive);
+    log::debug!(
+        "Interactive mode: {is_interactive}, no_auth: {no_auth} (explicit: {})",
+        args.no_auth.is_some()
+    );
+
     let creds = if args.use_pat {
         if let Some(Credentials::PersonalAccessToken(pat)) = &cache.creds {
             Credentials::PersonalAccessToken(pat.clone())
+        } else if no_auth {
+            anyhow::bail!(
+                "No cached credentials found and --no-auth is set. \
+                 Run interactively first to authenticate, or use --no-auth=false to allow auth prompts."
+            );
         } else {
+            // Check if another auth flow is in progress
+            if todo::cache::is_auth_in_progress(&cache_path) {
+                anyhow::bail!(
+                    "Another authentication flow is already in progress. \
+                     Please wait for it to complete or remove the stale lock file."
+                );
+            }
+            let _auth_lock = todo::cache::acquire_auth_lock(&cache_path)?;
             let creds = ask_for_pat()?;
             cache.creds = Some(creds.clone());
             todo::cache::save(&cache_path, &cache)?;
@@ -208,14 +236,27 @@ async fn main() -> anyhow::Result<()> {
             access_token: access_token.clone(),
             refresh_token: refresh_token.clone(),
         }
+    } else if no_auth {
+        anyhow::bail!(
+            "No cached credentials found and --no-auth is set. \
+             Run interactively first to authenticate, or use --no-auth=false to allow auth prompts."
+        );
     } else {
+        // Check if another auth flow is in progress
+        if todo::cache::is_auth_in_progress(&cache_path) {
+            anyhow::bail!(
+                "Another authentication flow is already in progress. \
+                 Please wait for it to complete or remove the stale lock file."
+            );
+        }
+        let _auth_lock = todo::cache::acquire_auth_lock(&cache_path)?;
         let creds = execute_authorization_flow().await?;
         cache.creds = Some(creds.clone());
         todo::cache::save(&cache_path, &cache)?;
         creds
     };
 
-    let mut client = Client::new(creds)?;
+    let mut client = Client::new_with_options(creds, no_auth)?;
 
     // Resolve workspace GID
     let workspace_gid = if let Some(ref gid) = config.workspace_gid {
@@ -230,6 +271,11 @@ async fn main() -> anyhow::Result<()> {
         let workspace = if workspaces.len() == 1 {
             log::info!("Found single workspace: {}", workspaces[0].name);
             &workspaces[0]
+        } else if no_auth {
+            anyhow::bail!(
+                "Multiple workspaces found but --no-auth is set. \
+                 Run interactively first to select a workspace, or set workspace_gid in config."
+            );
         } else {
             println!("Multiple workspaces found. Please select one:");
             let workspace_names: Vec<&str> = workspaces.iter().map(|w| w.name.as_str()).collect();
@@ -250,9 +296,11 @@ async fn main() -> anyhow::Result<()> {
     let focus_project_gid = if let Some(ref gid) = config.focus_project_gid {
         log::debug!("Using configured focus project GID: {gid}");
         Some(gid.clone())
-    } else if args.use_cache {
-        // When using cache, don't try to fetch projects from Asana
-        log::debug!("Using cache mode with no focus project configured, skipping focus features.");
+    } else if args.use_cache || no_auth {
+        // When using cache or no_auth mode, don't try to fetch projects from Asana
+        log::debug!(
+            "Using cache/no-auth mode with no focus project configured, skipping focus features."
+        );
         None
     } else {
         log::info!("No focus project configured, fetching projects...");
