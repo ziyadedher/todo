@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0](https://github.com/ziyadedher/todo/compare/v1.8.1...v1.9.0) - 2026-01-25
+
+### Added
+
+- add --no-auth flag to prevent interactive auth prompts
+
 ## [1.8.1](https://github.com/ziyadedher/todo/compare/v1.8.0...v1.8.1) - 2026-01-02
 
 ### Other
